@@ -97,3 +97,22 @@ function ctwpsync_deactivation() {
 	wp_clear_scheduled_hook( 'ctwpsync_hourly_event' );
 }
 
+/* table holding ct event id and wp event id mapping */
+function ctwpsync_initplugin()
+{
+    global $wpdb;
+    $table_name = $wpdb->prefix.'ctwpsync_mapping';
+    $sql = "CREATE TABLE IF NOT EXISTS ".$table_name."(
+            id mediumint(9) NOT NULL AUTO_INCREMENT,
+            ct_id mediumint(9) NOT NULL,
+            wp_id mediumint(9) NOT NULL,
+            last_seen datetime NOT NULL,
+            event_start datetime NOT NULL,
+            event_end datetime NOT NULL,
+            UNIQUE KEY id (id),
+            UNIQUE KEY ct_id (ct_id)
+            );";
+    require_once(ABSPATH . '/wp-admin/includes/upgrade.php');
+    dbDelta($table_name, $sql);
+}
+add_action( 'plugins_loaded', 'ctwpsync_initplugin' );
