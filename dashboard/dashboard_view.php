@@ -13,6 +13,8 @@
 		<input type="text" size="30" name="ctwpsync_import_past" id="ctwpsync_import_past" class="text_box" placeholder="0" value="<?php echo $saved_data ? $saved_data['import_past'] : '' ; ?>" required> 
 		<br>Calendar import future days<br>
 		<input type="text" size="30" name="ctwpsync_import_future" id="ctwpsync_import_future" class="text_box" placeholder="380" value="<?php echo $saved_data ? $saved_data['import_future'] : '' ; ?>" required> 
+		<br>Resource type for categories, use -1 to disable categories management<br>
+		<input type="text" size="30" name="ctwpsync_resourcetype_for_categories" id="ctwpsync_resourcetype_for_categories" class="text_box" placeholder="-1" value="<?php echo $saved_data ? $saved_data['resourcetype_for_categories'] : '' ; ?>" required> 
 		<input type="submit" value="Save">
 		<p><strong>Last updated:</strong> <?php echo $lastupdated; ?></p>
  	</div>

@@ -147,12 +147,13 @@ function processCalendarEntry(CTApi\Models\Calendars\Appointment\Appointment $ct
             $event->event_end_time= $eDate->format('H:i:s');
             $event->event_all_day= false;
         }
-//            fwrite($myFile, serialize($event));
-//            fwrite($myFile, "\nStart: ".serialize($sDate)."\n");
-//            fwrite($myFile, "\nEnd: ". serialize($eDate)."\n");
+        if ($ctCalEntry->getImage() != null) {
+            // Handle image from ct calendar entry
+            logDebug("Entry has an image ". $ctCalEntry->getImage()->getFileUrl());
+            logError("Image handling not yet implemented, sorry");
+        }
         $saveResult= $event->save();
-        // logDebug("Save event result: ".serialize($saveResult));
-        logInfo("Saved ct event id: ".$ctCalEntry->getId(). " WP event ID ".$event->event_id." post id: ".$event->ID);
+        logInfo("Saved ct event id: ".$ctCalEntry->getId(). " WP event ID ".$event->event_id." post id: ".$event->ID." result: ".$saveResult);
         if ($addMode) {
             // Keeps track of ct event id and wp event id for subsequent updates+deletions
             $wpdb->insert($wpctsync_tablename, array(

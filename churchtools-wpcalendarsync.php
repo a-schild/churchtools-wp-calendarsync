@@ -21,6 +21,7 @@ function register_ctwpsync_settings(){
 	register_setting( 'ctwpsync-group', 'ctwpsync_ids');
 	register_setting( 'ctwpsync-group', 'ctwpsync_import_past');
 	register_setting( 'ctwpsync-group', 'ctwpsync_import_future');
+	register_setting( 'ctwpsync-group', 'ctwpsync_resourcetype_for_categories');
     $myPage= isset($_GET['page']) ? $_GET['page'] : "";
 	if ( $myPage === str_replace('.php','',basename(__FILE__)) ) {
 		if(!empty($_POST['ctwpsync_url'])){
@@ -51,7 +52,7 @@ function save_ctwpsync_settings() {
 	sort($data['ids']);
 	$data['import_past'] = trim($_POST['ctwpsync_import_past']);
 	$data['import_future'] = trim($_POST['ctwpsync_import_future']);
-
+    $data['resourcetype_for_categories'] = trim($_POST['ctwpsync_resourcetype_for_categories']);
 	if($saved_data) {
 		update_option( 'ctwpsync_options',  $data );
 	}else{
