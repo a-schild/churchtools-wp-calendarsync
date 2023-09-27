@@ -160,6 +160,7 @@ function processCalendarEntry(CTApi\Models\Calendars\Appointment\Appointment $ct
             $sDate= \DateTime::createFromFormat('Y-m-d\TH:i:s+', $ctCalEntry->getStartDate(), new DateTimeZone('UTC'));
             $combinedAppointment= CombinedAppointmentRequest::forAppointment($ctCalEntry->getCalendar()->getId(), $ctCalEntry->getId(), $sDate->format('Y-m-d'))->get();
             // logDebug("Got combined appointment ".serialize($combinedAppointment));
+            $desiredCategories= [];
             if ($combinedAppointment != null ) {
                 // Now process the resource bookings (if any)
                 $allBookings= $combinedAppointment->getBookings();
@@ -168,7 +169,41 @@ function processCalendarEntry(CTApi\Models\Calendars\Appointment\Appointment $ct
                     if ($thisResource->getResourceTypeId() == $resourcetype_for_categories) {
                         // Include this as a category
                         logDebug("Found resource with id ".$thisResource->getId(). " name: ".$thisResource->getName());
+                        array_push($desiredCategories, $thisResource->getName());
                     }
+                }
+            }
+            if (sizeof($desiredCategories) > 0) {
+                $wpDesiredCategories= [];
+                foreach ($desiredCategories as $dcKey => $desiredCategory) {
+                    $taxFilter = array( 'taxonomy' => 'event-categories', 'name' => $desiredCategory, 'hide_empty' => false);
+                    $wpCategories= get_terms($taxFilter);
+                    logDebug("Results: ".sizeof($wpCategories));
+                    if (sizeof($wpCategories) >= 1) {
+                        logDebug("Found matching wp category: ".$desiredCategory . " wp: ".$wpCategories[0]->term_id);
+                        array_push($wpDesiredCategories, $wpCategories[0]->term_id);
+                    } else {
+                        logInfo("Need to create category: ".$desiredCategory);
+                        $newTerm= wp_insert_term($desiredCategory, 'event-categories');
+                        if (is_array($newTerm)) {
+                            array_push($wpDesiredCategories, $newTerm["term_id"]);
+                        } else {
+                            logError("Failed inserting new event category ".$desiredCategory." Error: ".$newTerm->get_error_message());
+                        }
+                    }
+//                    foreach ($wpCategories as $key => $wpCategory) {
+//                        logDebug("WPCategory: ".serialize($wpCategory->term_id)." ".$wpCategory->name);
+//                        if ($wpCategory->name == $desiredCategory) {
+//                            array_push($wpDesiredCategories, $wpCategory->term_id);
+//                            $catFound= true;
+//                            logDebug("Found matching category: ".$desiredCategory);
+//                        }
+//                    }
+//                    if (!$catFound) {
+//                        logInfo("Need to create category: ".$desiredCategory);
+//                        $newTerm= wp_insert_term($desiredCategory, 'event-categories');
+//                        array_push($wpDesiredCategories, $newTerm["term_id"]);
+//                    }
                 }
             }
         }
@@ -267,7 +302,7 @@ function logDebug($message) {
        // Usage of logging
        // $message = 'SOME ERROR'.PHP_EOL;
        // error_log($message, 3, $logger);
-       error_log($message. "\n", 3, $logger);
+       error_log("DBG: ".$message. "\n", 3, $logger);
     }
 }
 
@@ -278,7 +313,7 @@ function logInfo($message) {
        // Usage of logging
        // $message = 'SOME ERROR'.PHP_EOL;
        // error_log($message, 3, $logger);
-       error_log($message. "\n", 3, $logger);
+       error_log("INF: ".$message. "\n", 3, $logger);
     }
 }
 
@@ -287,6 +322,6 @@ function logError($message) {
     // Usage of logging
     // $message = 'SOME ERROR'.PHP_EOL;
     // error_log($message, 3, $logger);
-    error_log($message. "\n", 3, $logger);
+    error_log("ERR: ".$message. "\n", 3, $logger);
 }
 
