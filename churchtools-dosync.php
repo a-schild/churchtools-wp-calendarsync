@@ -8,7 +8,8 @@ use CTApi\CTLog;
 CTLog::enableFileLog(); // enable logfile
 
 
-
+global $wpctsyncDoInfoLog;
+$wpctsyncDoInfoLog= true;
 global $wpctsyncDoDebugLog;
 $wpctsyncDoDebugLog= true;
 $hasError= false;
@@ -40,43 +41,43 @@ try
         ->get();
     foreach ($result as $key => $value) {
         if (!$value->getIsInternal()) {
-            logMessage("Caption: ".$value->getCaption());
-            logMessage("StartDate: ".$value->getStartDate());
-            logMessage("EndDate: ".$value->getEndDate());
-            logMessage("Is allday: ".$value->getAllDay());
-            //logMessage("Object: ".serialize($value));
+            logDebug("Caption: ".$value->getCaption());
+            logDebug("StartDate: ".$value->getStartDate());
+            logDebug("EndDate: ".$value->getEndDate());
+            logDebug("Is allday: ".$value->getAllDay());
+            //logDebug("Object: ".serialize($value));
             $result = $wpdb->get_results(sprintf('SELECT * FROM `%2$s` WHERE `ct_id` = %d ', $value->getId(), $wpdb_tablename));
             $addMode= false;
             if (sizeof($result) == 1) {
                 // We did already map it
-                logMessage("Found mapping for event");
+                logInfo("Found mapping for ct id: ".$value->getId());
                 $event= em_get_event($result[0]->wp_id);
                 if ($event->ID != null ){
                     // OK, still existing, make sure it's not in trash
-                    // logMessage(serialize($event));
+                    // logDebug(serialize($event));
                     if ($event->status == -1) {
                         // Is deleted
-                        logMessage("Event wp trash, removing from mapping");
+                        logInfo("Event wp trash, removing from mapping ct id: ". $value->getId());
                         $wpdb->query($wpdb->prepare("DELETE FROM ".$wpdb_tablename." WHERE ct_id=".$value->getId()));
                         $event= new EM_Event(false);
                         $addMode= true;
                     } else {
-                        logMessage("Event status ". $event->event_status);
+                        logDebug("Event status ". $event->event_status);
                         $addMode= false;
                     }
                 } else {
                     // No longer found, deleted?
-                    logMessage("Event no longer found in wp, removing from mapping");
+                    logInfo("Event no longer found in wp, removing from mapping, ct id: ".$value->getId());
                     $wpdb->query($wpdb->prepare("DELETE FROM ".$wpdb_tablename." WHERE ct_id=".$value->getId()));
                     $addMode= true;
                 }
             } else {
-                logMessage("No mapping for event found");
+                logDebug("No mapping for event found");
                 $event= new EM_Event(false);
                 $addMode= true;
             }
-            logMessage("Query result: ".serialize($result));
-            logMessage("Query result size: ".sizeof($result));
+            logDebug("Query result: ".serialize($result));
+            logDebug("Query result size: ".sizeof($result));
 
             // $event->event_timezone= "UTC+0"; // Only marks it as UTC, not usefull
             $event->event_timezone= wp_timezone_string(); // Fix it to the correct location
@@ -86,7 +87,7 @@ try
             if ($value->getAllDay() === "true") {
                 $sDate= $value->getStartDate();
                 $eDate= $value->getEndDate();
-                logMessage("StartDate: ".$sDate);
+                logDebug("StartDate: ".$sDate);
                 $event->event_start_date= $sDate;
                 $event->event_end_date= $eDate;
                 $event->event_all_day= true;
@@ -97,10 +98,10 @@ try
                 $eDate= \DateTime::createFromFormat('Y-m-d\TH:i:s+', $value->getEndDate(), new DateTimeZone('UTC'));
                 // Set to WP location time zone
                 $eDate->setTimezone(new DateTimeZone(wp_timezone_string()));
-                logMessage("StartDate: ".$sDate->format('Y-m-d'));
+                logDebug("StartDate: ".$sDate->format('Y-m-d'));
                 $event->event_start_date= $sDate->format('Y-m-d');
                 $event->event_end_date= $eDate->format('Y-m-d');
-                logMessage("StartTime: ".$sDate->format('H:i:s'));
+                logDebug("StartTime: ".$sDate->format('H:i:s'));
                 $event->event_start_time= $sDate->format('H:i:s');
                 $event->event_end_time= $eDate->format('H:i:s');
                 $event->event_all_day= false;
@@ -109,8 +110,8 @@ try
 //            fwrite($myFile, "\nStart: ".serialize($sDate)."\n");
 //            fwrite($myFile, "\nEnd: ". serialize($eDate)."\n");
             $saveResult= $event->save();
-            logMessage("Save event result: ".serialize($saveResult));
-            logMessage("CT event id: ".$value->getId(). " WP event ID ".$event->event_id." post id: ".$event->ID);
+            // logDebug("Save event result: ".serialize($saveResult));
+            logInfo("Saved ct event id: ".$value->getId(). " WP event ID ".$event->event_id." post id: ".$event->ID);
             if ($addMode) {
                 // Keeps track of ct event id and wp event id for subsequent updates+deletions
                 $wpdb->insert($wpdb->prefix . 'ctwpsync_mapping', array(
@@ -130,18 +131,38 @@ try
 catch (Exception $e)
 {
     $errorMessage= $e->getMessage();
-    logMessage($errorMessage);
+    logError($errorMessage);
     $hasError= true;
     session_destroy();
 }
 
-function logMessage($message) {
+function logDebug($message) {
     global $wpctsyncDoDebugLog;
     if ($wpctsyncDoDebugLog) {
-       $logger= plugin_dir_path(__FILE__).'wpcalsync-debug.log';
+       $logger= plugin_dir_path(__FILE__).'wpcalsync.log';
        // Usage of logging
        // $message = 'SOME ERROR'.PHP_EOL;
        // error_log($message, 3, $logger);
        error_log($message. "\n", 3, $logger);
     }
 }
+
+function logInfo($message) {
+    global $wpctsyncDoInfoLog;
+    if ($wpctsyncDoInfoLog) {
+       $logger= plugin_dir_path(__FILE__).'wpcalsync.log';
+       // Usage of logging
+       // $message = 'SOME ERROR'.PHP_EOL;
+       // error_log($message, 3, $logger);
+       error_log($message. "\n", 3, $logger);
+    }
+}
+
+function logError($message) {
+    $logger= plugin_dir_path(__FILE__).'wpcalsync.log';
+    // Usage of logging
+    // $message = 'SOME ERROR'.PHP_EOL;
+    // error_log($message, 3, $logger);
+    error_log($message. "\n", 3, $logger);
+}
+
