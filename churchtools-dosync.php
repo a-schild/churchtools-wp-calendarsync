@@ -6,6 +6,7 @@ if ( is_readable( __DIR__ . '/vendor/autoload.php' ) ) {
 use CTApi\CTConfig;
 use CTApi\CTLog;
 use CTApi\Models\Calendars\Appointment\AppointmentRequest;
+use CTApi\Models\Calendars\CombinedAppointment\CombinedAppointmentRequest;
 
 CTLog::enableFileLog(); // enable logfile
 
@@ -37,6 +38,7 @@ try
     $calendars= $options['ids'];
     $pastDays= $options['import_past'];
     $futureDays=  $options['import_future'];
+    $resourcetype_for_categories= $options['resourcetype_for_categories'];
     if ($pastDays < 0) {
         $fromDate= Date('y-m-d', strtotime('+'.($pastDays*-1).' days'));
     } else {
@@ -53,7 +55,7 @@ try
         ->where('to', $toDate)
         ->get();
     foreach ($result as $key => $ctCalEntry) {
-        processCalendarEntry($ctCalEntry);
+        processCalendarEntry($ctCalEntry, $resourcetype_for_categories);
     }
     // Now we will have to handle all wp events which are no longer visible
     // from CT (Either deleted or moved in another calendar)
@@ -73,7 +75,7 @@ catch (Exception $e)
  * @param type $ctCalEntry a CT calendar entry to be analyzed and processed
  * 
  */
-function processCalendarEntry(CTApi\Models\Calendars\Appointment\Appointment $ctCalEntry) {
+function processCalendarEntry(CTApi\Models\Calendars\Appointment\Appointment $ctCalEntry, int $resourcetype_for_categories) {
     if (!$ctCalEntry->getIsInternal()) {
         logDebug("Caption: ".$ctCalEntry->getCaption());
         logDebug("StartDate: ".$ctCalEntry->getStartDate());
@@ -151,6 +153,24 @@ function processCalendarEntry(CTApi\Models\Calendars\Appointment\Appointment $ct
             // Handle image from ct calendar entry
             logDebug("Entry has an image ". $ctCalEntry->getImage()->getFileUrl());
             logError("Image handling not yet implemented, sorry");
+        }
+        if ($resourcetype_for_categories > 0) {
+            logDebug("Using resources of type ".$resourcetype_for_categories." for wordpress categories");
+            // So we retrieve the resources booked with this calendar entry
+            $sDate= \DateTime::createFromFormat('Y-m-d\TH:i:s+', $ctCalEntry->getStartDate(), new DateTimeZone('UTC'));
+            $combinedAppointment= CombinedAppointmentRequest::forAppointment($ctCalEntry->getCalendar()->getId(), $ctCalEntry->getId(), $sDate->format('Y-m-d'))->get();
+            // logDebug("Got combined appointment ".serialize($combinedAppointment));
+            if ($combinedAppointment != null ) {
+                // Now process the resource bookings (if any)
+                $allBookings= $combinedAppointment->getBookings();
+                foreach ($allBookings as $key => $booking) {
+                    $thisResource= $booking->getResource();
+                    if ($thisResource->getResourceTypeId() == $resourcetype_for_categories) {
+                        // Include this as a category
+                        logDebug("Found resource with id ".$thisResource->getId(). " name: ".$thisResource->getName());
+                    }
+                }
+            }
         }
         $saveResult= $event->save();
         logInfo("Saved ct event id: ".$ctCalEntry->getId(). " WP event ID ".$event->event_id." post id: ".$event->ID." result: ".$saveResult);
