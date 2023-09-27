@@ -37,8 +37,16 @@ try
     $calendars= $options['ids'];
     $pastDays= $options['import_past'];
     $futureDays=  $options['import_future'];
-    $fromDate= Date('y-m-d', strtotime('-'.$pastDays.' days'));
-    $toDate= Date('y-m-d', strtotime('+'.$futureDays.' days'));
+    if ($pastDays < 0) {
+        $fromDate= Date('y-m-d', strtotime('+'.($pastDays*-1).' days'));
+    } else {
+        $fromDate= Date('y-m-d', strtotime('-'.$pastDays.' days'));
+    }
+    if ($futureDays < 0) {
+        $toDate= Date('y-m-d', strtotime('-'.($futureDays*-1).' days'));
+    } else {
+        $toDate= Date('y-m-d', strtotime('+'.$futureDays.' days'));
+    }
     $api= new CTApi\CTClient();
     $result= AppointmentRequest::forCalendars($calendars)
         ->where('from', $fromDate)
@@ -47,6 +55,9 @@ try
     foreach ($result as $key => $ctCalEntry) {
         processCalendarEntry($ctCalEntry);
     }
+    // Now we will have to handle all wp events which are no longer visible
+    // from CT (Either deleted or moved in another calendar)
+    // But don't remove old entries
 }
 catch (Exception $e)
 {
