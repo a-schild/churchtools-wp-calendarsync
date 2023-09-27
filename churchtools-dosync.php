@@ -154,6 +154,21 @@ function processCalendarEntry(CTApi\Models\Calendars\Appointment\Appointment $ct
             logDebug("Entry has an image ". $ctCalEntry->getImage()->getFileUrl());
             logError("Image handling not yet implemented, sorry");
         }
+        $saveResult= $event->save();
+        logInfo("Saved ct event id: ".$ctCalEntry->getId(). " WP event ID ".$event->event_id." post id: ".$event->ID." result: ".$saveResult);
+        if ($addMode) {
+            // Keeps track of ct event id and wp event id for subsequent updates+deletions
+            $wpdb->insert($wpctsync_tablename, array(
+                'ct_id' => $ctCalEntry->getId(),
+                'wp_id' => $event->event_id,
+                'last_seen' => date('Y-m-d H:i:s'),
+                'event_start' => $ctCalEntry->getStartDate(),
+                'event_end' => $ctCalEntry->getEndDate()
+            ));
+        } else {
+            // Update last seen time stamp to flag as "still existing"
+            $wpdb->query($wpdb->prepare("UPDATE ".$wpctsync_tablename." SET last_seen='".date('Y-m-d H:i:s')."' WHERE ct_id=".$ctCalEntry->getId()));
+        }
         if ($resourcetype_for_categories > 0) {
             logDebug("Using resources of type ".$resourcetype_for_categories." for wordpress categories");
             // So we retrieve the resources booked with this calendar entry
@@ -176,7 +191,7 @@ function processCalendarEntry(CTApi\Models\Calendars\Appointment\Appointment $ct
             if (sizeof($desiredCategories) > 0) {
                 $wpDesiredCategories= [];
                 foreach ($desiredCategories as $dcKey => $desiredCategory) {
-                    $taxFilter = array( 'taxonomy' => 'event-categories', 'name' => $desiredCategory, 'hide_empty' => false);
+                    $taxFilter = array( 'taxonomy' => EM_TAXONOMY_CATEGORY, 'name' => $desiredCategory, 'hide_empty' => false);
                     $wpCategories= get_terms($taxFilter);
                     logDebug("Results: ".sizeof($wpCategories));
                     if (sizeof($wpCategories) >= 1) {
@@ -184,43 +199,16 @@ function processCalendarEntry(CTApi\Models\Calendars\Appointment\Appointment $ct
                         array_push($wpDesiredCategories, $wpCategories[0]->term_id);
                     } else {
                         logInfo("Need to create category: ".$desiredCategory);
-                        $newTerm= wp_insert_term($desiredCategory, 'event-categories');
+                        $newTerm= wp_insert_term($desiredCategory, EM_TAXONOMY_CATEGORY);
                         if (is_array($newTerm)) {
                             array_push($wpDesiredCategories, $newTerm["term_id"]);
                         } else {
                             logError("Failed inserting new event category ".$desiredCategory." Error: ".$newTerm->get_error_message());
                         }
                     }
-//                    foreach ($wpCategories as $key => $wpCategory) {
-//                        logDebug("WPCategory: ".serialize($wpCategory->term_id)." ".$wpCategory->name);
-//                        if ($wpCategory->name == $desiredCategory) {
-//                            array_push($wpDesiredCategories, $wpCategory->term_id);
-//                            $catFound= true;
-//                            logDebug("Found matching category: ".$desiredCategory);
-//                        }
-//                    }
-//                    if (!$catFound) {
-//                        logInfo("Need to create category: ".$desiredCategory);
-//                        $newTerm= wp_insert_term($desiredCategory, 'event-categories');
-//                        array_push($wpDesiredCategories, $newTerm["term_id"]);
-//                    }
+                    wp_set_post_terms($event->ID, $wpDesiredCategories, EM_TAXONOMY_CATEGORY);
                 }
             }
-        }
-        $saveResult= $event->save();
-        logInfo("Saved ct event id: ".$ctCalEntry->getId(). " WP event ID ".$event->event_id." post id: ".$event->ID." result: ".$saveResult);
-        if ($addMode) {
-            // Keeps track of ct event id and wp event id for subsequent updates+deletions
-            $wpdb->insert($wpctsync_tablename, array(
-                'ct_id' => $ctCalEntry->getId(),
-                'wp_id' => $event->event_id,
-                'last_seen' => date('Y-m-d H:i:s'),
-                'event_start' => $ctCalEntry->getStartDate(),
-                'event_end' => $ctCalEntry->getEndDate()
-            ));
-        } else {
-            // Update last seen time stamp to flag as "still existing"
-            $wpdb->query($wpdb->prepare("UPDATE ".$wpctsync_tablename." SET last_seen='".date('Y-m-d H:i:s')."' WHERE ct_id=".$ctCalEntry->getId()));
         }
     } else {
         // Perhaps we need to remove it, since visibility has changed
