@@ -17,5 +17,6 @@
 		<input type="text" size="30" name="ctwpsync_resourcetype_for_categories" id="ctwpsync_resourcetype_for_categories" class="text_box" placeholder="-1" value="<?php echo $saved_data ? $saved_data['resourcetype_for_categories'] : '' ; ?>" required> 
 		<input type="submit" value="Save">
 		<p><strong>Last updated:</strong> <?php echo $lastupdated; ?></p>
+		<p><strong>Sync duration:</strong> <?php echo $lastsyncduration; ?></p>
  	</div>
 </div>

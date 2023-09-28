@@ -36,6 +36,7 @@ function ctwpsync_dashboard() {
         $saved_data = $saved_data ? unserialize($saved_data) : null ;
     }
 	$lastupdated = get_transient('churchtools_wpcalendarsync_lastupdated');
+	$lastsyncduration = get_transient('churchtools_wpcalendarsync_lastsyncduration');
 	// $saved_data = $saved_data ? unserialize($saved_data) : null ;
 	include_once (plugin_dir_path( __FILE__ ) .  'dashboard/dashboard_view.php');
 }

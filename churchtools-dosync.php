@@ -34,7 +34,8 @@ if(empty($options) || empty($options['url'])){
     logError("No sync options found, doing nothing");
     return;
 }
-logInfo("Start sync cycle ".Date('Y-m-d H:i:s'));
+$startTimestamp= Date('Y-m-d H:i:s');
+logInfo("Start sync cycle ".$startTimestamp);
 try
 {
     $serverURL= $options['url'];
@@ -59,9 +60,6 @@ try
         $toDate= Date('Y-m-d', strtotime('+'.$futureDays.' days'));
     }
     
-    // Used for cleanup of no longer found entries
-    $processingStart= date('Y-m-d H:i:s');
-    
     $api= new CTClient();
     logInfo("Searching calendar entries from ".$fromDate." until ".$toDate. " in calendars [".implode(",", $calendars)."]");
     $result= AppointmentRequest::forCalendars($calendars)
@@ -74,8 +72,13 @@ try
     // Now we will have to handle all wp events which are no longer visible
     // from CT (Either deleted or moved in another calendar)
     // But don't remove old entries
-    cleanupOldEntries($fromDate, $processingStart);
-    set_transient('churchtools_wpcalendarsync_lastupdated',current_time( 'mysql' ), 24*HOUR_IN_SECONDS);
+    cleanupOldEntries($fromDate, $startTimestamp);
+    $endTimestamp= Date('Y-m-d H:i:s');
+    $sdt= new DateTime($startTimestamp);
+    $edt= new DateTime($endTimestamp);
+    set_transient('churchtools_wpcalendarsync_lastupdated',$startTimestamp.' to '.$endTimestamp, 24*HOUR_IN_SECONDS);
+    $interval = $edt->diff($sdt);
+    set_transient('churchtools_wpcalendarsync_lastsyncduration',$interval->format('%H:%I:%S'), 24*HOUR_IN_SECONDS);
 }
 catch (Exception $e)
 {

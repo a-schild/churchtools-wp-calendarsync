@@ -7,12 +7,18 @@
     "authors": [
         {
             "name": "André Schild",
-            "email": "andre@schild.ws",
+            "email": "a.schild@aarboard.ch",
             "homepage": "https://github.com/a-schild",
             "role": "Developer"
         }],
     "require": {
         "php": "^8.1",
 		"5pm-hdh/churchtools-api": "dev-master"
-    }
+    },
+	"repositories": [
+		{
+			"type": "git",
+			"url": "git://github.com/a-schild/churchtools-api.git"
+		}
+	]
 }
