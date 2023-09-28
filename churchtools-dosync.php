@@ -104,6 +104,11 @@ function processCalendarEntry(Appointment $ctCalEntry, int $resourcetype_for_cat
         global $wpdb;
         $result = $wpdb->get_results(sprintf('SELECT * FROM `%2$s` WHERE `ct_id` = %d ', $ctCalEntry->getId(), $wpctsync_tablename));
         $addMode= false;
+        $ct_image_id= null; // CT file id of image
+        $wp_image_id= null; // WP attachment id of post image
+        $ct_flyer_id= null; // CT file id of flyer
+        $wp_flyer_id= null; // WP flyer attachment id
+        $newCtImageID= null;
         if (sizeof($result) == 1) {
             // We did already map it
             logInfo("Found mapping for ct id: ".$ctCalEntry->getId());
@@ -120,6 +125,10 @@ function processCalendarEntry(Appointment $ctCalEntry, int $resourcetype_for_cat
                 } else {
                     logDebug("Event status ". $event->event_status);
                     $addMode= false;
+                    $ct_image_id= $result[0]->ct_image_id;
+                    $wp_image_id= $result[0]->wp_image_id;
+                    $ct_flyer_id= $result[0]->ct_flyer_id;
+                    $wp_flyer_id= $result[0]->wp_flyer_id;
                 }
             } else {
                 // No longer found, deleted?
@@ -167,32 +176,51 @@ function processCalendarEntry(Appointment $ctCalEntry, int $resourcetype_for_cat
             $event->event_end_time= $eDate->format('H:i:s');
             $event->event_all_day= false;
         }
+        $imageURL= null;
+        $imageName= null;
         if ($ctCalEntry->getImage() != null) {
             // Handle image from ct calendar entry
-            logDebug("Entry has an image ". $ctCalEntry->getImage()->getFileUrl());
-            logError("Image handling not yet implemented, sorry");
-            if (has_post_thumbnail($event->id)) {
-                logDebug("Has thumbnail");
-                $image = wp_get_attachment_image_src( get_post_thumbnail_id( $event->id, 'single-post-thumbnail'));
-                logDebug(serialize($image));
-            } else {
-                logDebug("No thumbnail");
+            $newCtImageID= $ctCalEntry->getImage()->getId();
+            if ($addMode || $ct_image_id == null || $ct_image_id != $newCtImageID) {
+                $imageURL= $ctCalEntry->getImage()->getFileUrl();
+                $imageName= $ctCalEntry->getImage()->getName();
+
+                logDebug("Add/updateimage ". $ctCalEntry->getImage()->getFileUrl()." filename: ".$ctCalEntry->getImage()->getName());
+//                if (has_post_thumbnail($event->id)) {
+//                    logDebug("Has thumbnail");
+//                    $image= get_post_thumbnail_id( $event->id, 'full' );
+//                    //$image = wp_get_attachment_image_src( get_post_thumbnail_id( $event->id, 'single-post-thumbnail'));
+//                    logDebug(serialize($image));
+//                } else {
+//                    logDebug("No thumbnail");
+//                }
             }
         }
         $saveResult= $event->save();
         logInfo("Saved ct event id: ".$ctCalEntry->getId(). " WP event ID ".$event->event_id." post id: ".$event->ID." result: ".$saveResult);
+        if ($imageURL != null) {
+            $attachmentID= setEventImage($imageURL, $imageName, $event->ID);
+            logDebug("Attached image ".$imageName." from ".$imageURL." as attachement ".$attachmentID);
+        }
         if ($addMode) {
             // Keeps track of ct event id and wp event id for subsequent updates+deletions
             $wpdb->insert($wpctsync_tablename, array(
                 'ct_id' => $ctCalEntry->getId(),
                 'wp_id' => $event->event_id,
+                'ct_image_id' => $newCtImageID,
                 'last_seen' => date('Y-m-d H:i:s'),
                 'event_start' => $ctCalEntry->getStartDate(),
                 'event_end' => $ctCalEntry->getEndDate()
             ));
         } else {
             // Update last seen time stamp to flag as "still existing"
-            $wpdb->query($wpdb->prepare("UPDATE ".$wpctsync_tablename." SET last_seen='".date('Y-m-d H:i:s')."' WHERE ct_id=".$ctCalEntry->getId()));
+            $sql= "UPDATE ".$wpctsync_tablename.
+                " SET last_seen='".date('Y-m-d H:i:s')."' ";
+            if ($newCtImageID != null) {
+                $sql.= ", ct_image_id=".$newCtImageID." ";
+            }
+            $sql.= "WHERE ct_id=".$ctCalEntry->getId();
+            $wpdb->query($wpdb->prepare($sql));
         }
         // Handle event categories from resource type
         updateEventCategories($resourcetype_for_categories, $ctCalEntry, $event);
@@ -351,6 +379,47 @@ function cleanupOldEntries($startDate, $processingStart) {
         logDebug("Deleting mapping entry for ct_id: ".$ctID." PK id: ".$delID);
         $wpdb->query($wpdb->prepare("DELETE FROM ".$wpctsync_tablename." WHERE id=".$delID));
     }
+}
+
+/*
+ * $fileURL Download the image file from there
+ * $fileName Name of the file to download
+ * $postID  Attach to this post
+ * 
+ * return attachmentID
+ * 
+ * $file is the path to your uploaded file (for example as set in the $_FILE posted file array)
+ * $filename is the name of the file
+ * first we need to upload the file into the wp upload folder.
+ */
+function setEventImage($fileURL, $fileName, $postID) {
+    $upload_file = wp_upload_bits( $fileName, null, file_get_contents($fileURL) );
+    logDebug("Result of fileupload :".serialize($upload_file));
+    if ( ! $upload_file['error'] ) {
+      // if succesfull insert the new file into the media library (create a new attachment post type).
+      $wp_filetype = wp_check_filetype($fileName, null );
+
+      $attachment = array(
+        'post_mime_type' => $wp_filetype['type'],
+        'post_parent'    => $postID,
+        'post_title'     => preg_replace( '/\.[^.]+$/', '', $fileName ),
+        'post_content'   => '',
+        'post_status'    => 'inherit'
+      );
+
+      $attachment_id = wp_insert_attachment( $attachment, $upload_file['file'], $postID );
+
+      if ( ! is_wp_error( $attachment_id ) ) {
+         // if attachment post was successfully created, insert it as a thumbnail to the post $post_id.
+         require_once(ABSPATH . "wp-admin" . '/includes/image.php');
+
+         $attachment_data = wp_generate_attachment_metadata( $attachment_id, $upload_file['file'] );
+
+         wp_update_attachment_metadata( $attachment_id,  $attachment_data );
+         set_post_thumbnail( $postID, $attachment_id );
+       }
+    }
+    return $attachment_id;
 }
 
 function logDebug($message) {
