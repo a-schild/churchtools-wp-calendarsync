@@ -267,7 +267,11 @@ function updateEventCategories(int $resourcetype_for_categories, Appointment $ct
     if ($resourcetype_for_categories > 0) {
         logDebug("Using resources of type ".$resourcetype_for_categories." for wordpress categories");
         // So we retrieve the resources booked with this calendar entry
-        $sDate= \DateTime::createFromFormat('Y-m-d\TH:i:s+', $ctCalEntry->getStartDate(), new DateTimeZone('UTC'));
+        if ($ctCalEntry->getAllDay() === "true") {
+            $sDate= \DateTime::createFromFormat('Y-m-d', $ctCalEntry->getStartDate(), new DateTimeZone('UTC'));
+        } else {
+            $sDate= \DateTime::createFromFormat('Y-m-d\TH:i:s+', $ctCalEntry->getStartDate(), new DateTimeZone('UTC'));
+        }
         $combinedAppointment= CombinedAppointmentRequest::forAppointment($ctCalEntry->getCalendar()->getId(), $ctCalEntry->getId(), $sDate->format('Y-m-d'))->get();
         // logDebug("Got combined appointment ".serialize($combinedAppointment));
         $desiredCategories= [];

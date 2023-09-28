@@ -31,6 +31,10 @@ function register_ctwpsync_settings(){
 }
 function ctwpsync_dashboard() {
 	$saved_data =  get_option('ctwpsync_options');
+    if (gettype($saved_data) == "string") {
+        // Under some circumstances this could be returned as a string...
+        $saved_data = $saved_data ? unserialize($saved_data) : null ;
+    }
 	$lastupdated = get_transient('churchtools_wpcalendar_lastupdated');
 	// $saved_data = $saved_data ? unserialize($saved_data) : null ;
 	include_once (plugin_dir_path( __FILE__ ) .  'dashboard/dashboard_view.php');
@@ -114,6 +118,6 @@ function ctwpsync_initplugin()
             UNIQUE KEY ct_id (ct_id)
             );";
     require_once(ABSPATH . '/wp-admin/includes/upgrade.php');
-    dbDelta($table_name, $sql);
+    dbDelta($sql);
 }
 add_action( 'plugins_loaded', 'ctwpsync_initplugin' );
