@@ -5,6 +5,9 @@ if ( is_readable( __DIR__ . '/vendor/autoload.php' ) ) {
 
 use CTApi\CTConfig;
 use CTApi\CTLog;
+use CTApi\CTClient;
+use CTApi\Models\Calendars\Appointment\Address;
+use CTApi\Models\Calendars\Appointment\Appointment;
 use CTApi\Models\Calendars\Appointment\AppointmentRequest;
 use CTApi\Models\Calendars\CombinedAppointment\CombinedAppointmentRequest;
 
@@ -32,24 +35,31 @@ try
 {
     $serverURL= $options['url'];
     $apiToken= $options['apitoken'];
-    CTApi\CTConfig::setApiURL($serverURL);
-    CTApi\CTConfig::setApiKey($apiToken);
-    CTApi\CTConfig::validateConfig();
+    CTConfig::setApiURL($serverURL);
+    CTConfig::setApiKey($apiToken);
+    CTConfig::validateConfig();
     $calendars= $options['ids'];
     $pastDays= $options['import_past'];
     $futureDays=  $options['import_future'];
     $resourcetype_for_categories= $options['resourcetype_for_categories'];
+    // Make sure to have a valid expression, and not something like "now - -1"
     if ($pastDays < 0) {
-        $fromDate= Date('y-m-d', strtotime('+'.($pastDays*-1).' days'));
+        $fromDate= Date('Y-m-d', strtotime('+'.($pastDays*-1).' days'));
     } else {
-        $fromDate= Date('y-m-d', strtotime('-'.$pastDays.' days'));
+        $fromDate= Date('Y-m-d', strtotime('-'.$pastDays.' days'));
     }
+    // Make sure to have a valid expression, and not something like "now - -1"
     if ($futureDays < 0) {
-        $toDate= Date('y-m-d', strtotime('-'.($futureDays*-1).' days'));
+        $toDate= Date('Y-m-d', strtotime('-'.($futureDays*-1).' days'));
     } else {
-        $toDate= Date('y-m-d', strtotime('+'.$futureDays.' days'));
+        $toDate= Date('Y-m-d', strtotime('+'.$futureDays.' days'));
     }
-    $api= new CTApi\CTClient();
+    
+    // Used for cleanup of no longer found entries
+    $processingStart= date('Y-m-d H:i:s');
+    
+    $api= new CTClient();
+    logInfo("Searching calendar entries from ".$fromDate." until ".$toDate. " in calendars [".implode(",", $calendars)."]");
     $result= AppointmentRequest::forCalendars($calendars)
         ->where('from', $fromDate)
         ->where('to', $toDate)
@@ -60,6 +70,7 @@ try
     // Now we will have to handle all wp events which are no longer visible
     // from CT (Either deleted or moved in another calendar)
     // But don't remove old entries
+    cleanupOldEntries($fromDate, $processingStart);
 }
 catch (Exception $e)
 {
@@ -70,12 +81,13 @@ catch (Exception $e)
 }
 
 /**
- * Process a single calendar entry from ct
+ * 
+ * Process a single calendar entry from ct and create or update wp event
  * 
  * @param type $ctCalEntry a CT calendar entry to be analyzed and processed
  * 
  */
-function processCalendarEntry(CTApi\Models\Calendars\Appointment\Appointment $ctCalEntry, int $resourcetype_for_categories) {
+function processCalendarEntry(Appointment $ctCalEntry, int $resourcetype_for_categories) {
     if (!$ctCalEntry->getIsInternal()) {
         logDebug("Caption: ".$ctCalEntry->getCaption());
         logDebug("StartDate: ".$ctCalEntry->getStartDate());
@@ -116,7 +128,7 @@ function processCalendarEntry(CTApi\Models\Calendars\Appointment\Appointment $ct
         }
         //logDebug("Query result: ".serialize($result));
         //logDebug("Query result size: ".sizeof($result));
-        logDebug(serialize($ctCalEntry));
+        // logDebug(serialize($ctCalEntry));
         if ($ctCalEntry->getAddress() != null) {
             $locationID= getCreateLocation($ctCalEntry->getAddress());
             if (isset($locationID)) {
@@ -169,47 +181,8 @@ function processCalendarEntry(CTApi\Models\Calendars\Appointment\Appointment $ct
             // Update last seen time stamp to flag as "still existing"
             $wpdb->query($wpdb->prepare("UPDATE ".$wpctsync_tablename." SET last_seen='".date('Y-m-d H:i:s')."' WHERE ct_id=".$ctCalEntry->getId()));
         }
-        if ($resourcetype_for_categories > 0) {
-            logDebug("Using resources of type ".$resourcetype_for_categories." for wordpress categories");
-            // So we retrieve the resources booked with this calendar entry
-            $sDate= \DateTime::createFromFormat('Y-m-d\TH:i:s+', $ctCalEntry->getStartDate(), new DateTimeZone('UTC'));
-            $combinedAppointment= CombinedAppointmentRequest::forAppointment($ctCalEntry->getCalendar()->getId(), $ctCalEntry->getId(), $sDate->format('Y-m-d'))->get();
-            // logDebug("Got combined appointment ".serialize($combinedAppointment));
-            $desiredCategories= [];
-            if ($combinedAppointment != null ) {
-                // Now process the resource bookings (if any)
-                $allBookings= $combinedAppointment->getBookings();
-                foreach ($allBookings as $key => $booking) {
-                    $thisResource= $booking->getResource();
-                    if ($thisResource->getResourceTypeId() == $resourcetype_for_categories) {
-                        // Include this as a category
-                        logDebug("Found resource with id ".$thisResource->getId(). " name: ".$thisResource->getName());
-                        array_push($desiredCategories, $thisResource->getName());
-                    }
-                }
-            }
-            if (sizeof($desiredCategories) > 0) {
-                $wpDesiredCategories= [];
-                foreach ($desiredCategories as $dcKey => $desiredCategory) {
-                    $taxFilter = array( 'taxonomy' => EM_TAXONOMY_CATEGORY, 'name' => $desiredCategory, 'hide_empty' => false);
-                    $wpCategories= get_terms($taxFilter);
-                    logDebug("Results: ".sizeof($wpCategories));
-                    if (sizeof($wpCategories) >= 1) {
-                        logDebug("Found matching wp category: ".$desiredCategory . " wp: ".$wpCategories[0]->term_id);
-                        array_push($wpDesiredCategories, $wpCategories[0]->term_id);
-                    } else {
-                        logInfo("Need to create category: ".$desiredCategory);
-                        $newTerm= wp_insert_term($desiredCategory, EM_TAXONOMY_CATEGORY);
-                        if (is_array($newTerm)) {
-                            array_push($wpDesiredCategories, $newTerm["term_id"]);
-                        } else {
-                            logError("Failed inserting new event category ".$desiredCategory." Error: ".$newTerm->get_error_message());
-                        }
-                    }
-                    wp_set_post_terms($event->ID, $wpDesiredCategories, EM_TAXONOMY_CATEGORY);
-                }
-            }
-        }
+        // Handle event categories from resource type
+        updateEventCategories($resourcetype_for_categories, $ctCalEntry, $event);
     } else {
         // Perhaps we need to remove it, since visibility has changed
         global $wpctsync_tablename;
@@ -237,9 +210,9 @@ function processCalendarEntry(CTApi\Models\Calendars\Appointment\Appointment $ct
  * @param CTApi\Models\Calendars\Appointment\Address $appointmentAddress
  * @return type a location id, either a found location or a newly created one
  */
-function getCreateLocation(CTApi\Models\Calendars\Appointment\Address $appointmentAddress) {
+function getCreateLocation(Address $appointmentAddress) {
      if ($appointmentAddress != null) {
-         logDebug("CT Location address is: ".serialize($appointmentAddress));
+         // logDebug("CT Location address is: ".serialize($appointmentAddress));
          $appointmentAddress->getMeetingAt(); // Ortsangabe (Zentrum Ipsach etc.)
          $appointmentAddress->getAddition(); // Weitere Ortsangabe
          $appointmentAddress->getStreet(); // Strasse
@@ -281,6 +254,86 @@ function getCreateLocation(CTApi\Models\Calendars\Appointment\Address $appointme
              return $newLocation->id;
          }
      }
+}
+
+/**
+ * Update/create event categories based on the churchtool resources assigned to the appointment
+ * 
+ * @param int $resourcetype_for_categories
+ * @param CTApi\Models\Calendars\Appointment\Appointment $ctCalEntry
+ * @param EM_Event $event
+ */
+function updateEventCategories(int $resourcetype_for_categories, Appointment $ctCalEntry, EM_Event $event) {
+    if ($resourcetype_for_categories > 0) {
+        logDebug("Using resources of type ".$resourcetype_for_categories." for wordpress categories");
+        // So we retrieve the resources booked with this calendar entry
+        $sDate= \DateTime::createFromFormat('Y-m-d\TH:i:s+', $ctCalEntry->getStartDate(), new DateTimeZone('UTC'));
+        $combinedAppointment= CombinedAppointmentRequest::forAppointment($ctCalEntry->getCalendar()->getId(), $ctCalEntry->getId(), $sDate->format('Y-m-d'))->get();
+        // logDebug("Got combined appointment ".serialize($combinedAppointment));
+        $desiredCategories= [];
+        if ($combinedAppointment != null ) {
+            // Now process the resource bookings (if any)
+            $allBookings= $combinedAppointment->getBookings();
+            foreach ($allBookings as $key => $booking) {
+                $thisResource= $booking->getResource();
+                if ($thisResource->getResourceTypeId() == $resourcetype_for_categories) {
+                    // Include this as a category
+                    logDebug("Found resource with id ".$thisResource->getId(). " name: ".$thisResource->getName());
+                    array_push($desiredCategories, $thisResource->getName());
+                }
+            }
+        }
+        if (sizeof($desiredCategories) > 0) {
+            $wpDesiredCategories= [];
+            foreach ($desiredCategories as $dcKey => $desiredCategory) {
+                $taxFilter = array( 'taxonomy' => EM_TAXONOMY_CATEGORY, 'name' => $desiredCategory, 'hide_empty' => false);
+                $wpCategories= get_terms($taxFilter);
+                logDebug("Results: ".sizeof($wpCategories));
+                if (sizeof($wpCategories) >= 1) {
+                    logDebug("Found matching wp category: ".$desiredCategory . " wp: ".$wpCategories[0]->term_id);
+                    array_push($wpDesiredCategories, $wpCategories[0]->term_id);
+                } else {
+                    logInfo("Need to create category: ".$desiredCategory);
+                    $newTerm= wp_insert_term($desiredCategory, EM_TAXONOMY_CATEGORY);
+                    if (is_array($newTerm)) {
+                        array_push($wpDesiredCategories, $newTerm["term_id"]);
+                    } else {
+                        logError("Failed inserting new event category ".$desiredCategory." Error: ".$newTerm->get_error_message());
+                    }
+                }
+                wp_set_post_terms($event->ID, $wpDesiredCategories, EM_TAXONOMY_CATEGORY);
+            }
+        }
+    }
+}
+
+/**
+ * Remove no longer existing/found entries
+ * We only look for entries in the future (Or more precise the >= $startDate
+ * 
+ * @param type $startDate       Only look at events starting >= $startDate
+ * @param type $processingStart All records with lastSeen < $processingStart are no longer existing
+ * 
+ */
+function cleanupOldEntries($startDate, $processingStart) {
+    global $wpctsync_tablename;
+    global $wpdb;
+    $sql= 'SELECT * FROM `'.$wpctsync_tablename.'` WHERE `event_start` >= \''.$startDate.'\' and last_seen < \''.$processingStart.'\'' ;
+    $result = $wpdb->get_results($sql);
+    logDebug("Found ".sizeof($result).' events to delete via '.$sql);
+    // Now process all deletions
+    foreach ($result as $key => $toDelRecord) {
+        $delID= $toDelRecord->id; // PK in sync table
+        $ctID= $toDelRecord->ct_id; // CT appintment id in sync table
+        $wpEventID= $toDelRecord->wp_id; // WP event id
+        logDebug("Deleting wp event with id ".$wpEventID);
+        $toDelEvent= new EM_Event($wpEventID);
+        if ($toDelEvent != null) {
+            $toDelEvent->delete(false);
+        }
+        logDebug("Deleting mapping entry for ct_id: ".$ctID." PK id: ".$delID);
+        $wpdb->query($wpdb->prepare("DELETE FROM ".$wpctsync_tablename." WHERE id=".$delID));
+    }
 }
 
 function logDebug($message) {
