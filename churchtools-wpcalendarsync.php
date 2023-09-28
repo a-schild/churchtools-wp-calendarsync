@@ -35,7 +35,7 @@ function ctwpsync_dashboard() {
         // Under some circumstances this could be returned as a string...
         $saved_data = $saved_data ? unserialize($saved_data) : null ;
     }
-	$lastupdated = get_transient('churchtools_wpcalendar_lastupdated');
+	$lastupdated = get_transient('churchtools_wpcalendarsync_lastupdated');
 	// $saved_data = $saved_data ? unserialize($saved_data) : null ;
 	include_once (plugin_dir_path( __FILE__ ) .  'dashboard/dashboard_view.php');
 }

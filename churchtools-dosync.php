@@ -28,9 +28,13 @@ $wpctsync_tablename = $wpdb_prefix.'ctwpsync_mapping';
 $hasError= false;
 $errorMessage= null;
 $options =  get_option('ctwpsync_options');
+
+// Make sure it's configured, else do nothing
 if(empty($options) || empty($options['url'])){
+    logError("No sync options found, doing nothing");
     return;
 }
+logInfo("Start sync cycle ".Date('Y-m-d H:i:s'));
 try
 {
     $serverURL= $options['url'];
@@ -71,6 +75,7 @@ try
     // from CT (Either deleted or moved in another calendar)
     // But don't remove old entries
     cleanupOldEntries($fromDate, $processingStart);
+    set_transient('churchtools_wpcalendarsync_lastupdated',current_time( 'mysql' ), 24*HOUR_IN_SECONDS);
 }
 catch (Exception $e)
 {
@@ -79,6 +84,7 @@ catch (Exception $e)
     $hasError= true;
     session_destroy();
 }
+logInfo("End sync cycle ".Date('Y-m-d H:i:s'));
 
 /**
  * 
