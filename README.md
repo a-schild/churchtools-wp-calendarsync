@@ -15,13 +15,14 @@ https://de.wordpress.org/plugins/events-manager/
 - The title, description and location are synced to wordpress
 - The image of the calendar entry is synced to wordpress
 - Support for all-day events
+- Sync window is specified by n days in the past and m days in the future
 - Uses the modern REST api of churchtools
 - Creates logfile in the plugin folder, configurable log levels
 
-### Room for improvement (Missing features)
-- Build wordpress package via github actions
+### Room for improvement (and/or missing features)
+- Assign categories based on calendar (High priority)
 - Use plugin versioning
-- Assign categories based on calendar
+- Build wordpress package via github actions
 - Configure log level from wordpress UI
 - Show log in wordpress UI
 - Take event information over to wordpress
@@ -30,6 +31,9 @@ https://de.wordpress.org/plugins/events-manager/
 - Notify someone about sync problems
 - Better error handling in the sync process
 - Link config screen directly from plugins list
+- When an image is removed in churchtools, then remove it in wordpress too
+  (Replacing images already works)
+- Make plugin (and updates) available via wordpress plugins site
 
 ### Reason for this way of integration
 One of biggest advantages of this approach is the fact,
