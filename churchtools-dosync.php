@@ -98,10 +98,7 @@ logInfo("End sync cycle ".Date('Y-m-d H:i:s'));
  */
 function processCalendarEntry(Appointment $ctCalEntry, int $resourcetype_for_categories) {
     if (!$ctCalEntry->getIsInternal()) {
-        logDebug("Caption: ".$ctCalEntry->getCaption());
-        logDebug("StartDate: ".$ctCalEntry->getStartDate());
-        logDebug("EndDate: ".$ctCalEntry->getEndDate());
-        logDebug("Is allday: ".$ctCalEntry->getAllDay());
+        logDebug("Caption: ".$ctCalEntry->getCaption()." StartDate: ".$ctCalEntry->getStartDate()." EndDate: ".$ctCalEntry->getEndDate()." Is allday: ".$ctCalEntry->getAllDay());
         //logDebug("Object: ".serialize($ctCalEntry));
         global $wpctsync_tablename;
         global $wpdb;
@@ -174,6 +171,13 @@ function processCalendarEntry(Appointment $ctCalEntry, int $resourcetype_for_cat
             // Handle image from ct calendar entry
             logDebug("Entry has an image ". $ctCalEntry->getImage()->getFileUrl());
             logError("Image handling not yet implemented, sorry");
+            if (has_post_thumbnail($event->id)) {
+                logDebug("Has thumbnail");
+                $image = wp_get_attachment_image_src( get_post_thumbnail_id( $event->id, 'single-post-thumbnail'));
+                logDebug(serialize($image));
+            } else {
+                logDebug("No thumbnail");
+            }
         }
         $saveResult= $event->save();
         logInfo("Saved ct event id: ".$ctCalEntry->getId(). " WP event ID ".$event->event_id." post id: ".$event->ID." result: ".$saveResult);
