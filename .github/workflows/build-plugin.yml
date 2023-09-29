@@ -2,6 +2,10 @@ name: Generate Installable Plugin, and Upload as Release Asset
 on:
   release:
     types: [published]
+    # Triggers the workflow on push for the master branch
+  push:
+    branches: [ main, master ]
+
 jobs:
   build:
     name: Upload Release Asset
