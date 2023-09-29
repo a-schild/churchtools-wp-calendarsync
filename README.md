@@ -52,6 +52,9 @@ event manager, the church tool sync process will not touch these.
 - Install the dependencies with `composer install`
 
 ## Configuration of the plugin
+- We recommend to create a ctsync or similar wp account,
+  so all events get this user assigned as the owner.
+  The cron job uses the one logged in, which did activate the plugin
 - Get the url to your churchtool installation
 - Get a API token, which has read access to the desired calendars
 - Go to the wordpress admin page
@@ -96,5 +99,10 @@ node main.js -r
 - The wp-cron job runs every hour
   - If you wish to trigger it manually, you can install this plugin
     https://wordpress.org/plugins/wp-crontrol/
+  - You can also see who is associated with the cron job, and will
+    be the owner of the event entries
+- Use a seaparate wordpress user for installing and configuring the 
+  plugin. This way, the owner of the new events will be that user
+  and you can see who created them
 
 (c) 2023 Aarboard a.schild@aarboard.ch
