@@ -12,19 +12,20 @@
 add_action ('admin_menu', 'ctwpsync_setup_menu'  );
 add_action('save_ctwpsync_settings', 'save_ctwpsync_settings' );
 function ctwpsync_setup_menu() {
-	add_options_page('ChurchTools Cal Importer','ChurchTools calendar sync','manage_options','churchtools-wpcalendarsync','ctwpsync_dashboard');
+	add_options_page('ChurchTools Calendar Importer','ChurchTools Calsync','manage_options','churchtools-wpcalendarsync','ctwpsync_dashboard');
 	add_action('admin_init', 'register_ctwpsync_settings' );
 }
 function register_ctwpsync_settings(){
-	register_setting( 'ctwpsync-group', 'ctwpsync_url');
-	register_setting( 'ctwpsync-group', 'ctwpsync_apitoken');
-	register_setting( 'ctwpsync-group', 'ctwpsync_ids');
-	register_setting( 'ctwpsync-group', 'ctwpsync_import_past');
-	register_setting( 'ctwpsync-group', 'ctwpsync_import_future');
-	register_setting( 'ctwpsync-group', 'ctwpsync_resourcetype_for_categories');
+	register_setting( 'ctwpsync-group', 'ctwpsync_url');    // URL to the churchtools installation
+	register_setting( 'ctwpsync-group', 'ctwpsync_apitoken');   // API auth token
+	register_setting( 'ctwpsync-group', 'ctwpsync_ids');        // Calendar ID's to sync from
+	register_setting( 'ctwpsync-group', 'ctwpsync_ids_categories'); // Category for the above calendar id
+	register_setting( 'ctwpsync-group', 'ctwpsync_import_past');    // Days in the past to sync
+	register_setting( 'ctwpsync-group', 'ctwpsync_import_future');  // Days in the future to sync
+	register_setting( 'ctwpsync-group', 'ctwpsync_resourcetype_for_categories');    // Sync categories from resources
     $myPage= isset($_GET['page']) ? $_GET['page'] : "";
 	if ( $myPage === str_replace('.php','',basename(__FILE__)) ) {
-		if(!empty($_POST['ctwpsync_url'])){
+		if(!empty($_POST['ctwpsync_url']) && !empty($_POST['ctwpsync_apitoken'])){
 			save_ctwpsync_settings();
 		}
 	}
@@ -54,7 +55,13 @@ function save_ctwpsync_settings() {
 			$data['ids'][] = intval($id);
 		}
 	}
-	sort($data['ids']);
+    // Don't sort ID's, otherwise the category assignment gets wrong
+	$ids_categories=trim($_POST['ctwpsync_ids_categories']);
+	$data['ids_categories']=[];
+	foreach(preg_split('/,/',$ids_categories) as $id_cat){
+        $data['ids_categories'][] = trim($id_cat);
+	}
+    // Don't sort ID's, otherwise the category assignment gets wrong
 	$data['import_past'] = trim($_POST['ctwpsync_import_past']);
 	$data['import_future'] = trim($_POST['ctwpsync_import_future']);
     $data['resourcetype_for_categories'] = trim($_POST['ctwpsync_resourcetype_for_categories']);

@@ -11,6 +11,7 @@ https://de.wordpress.org/plugins/events-manager/
 
 ## Features
 - Sync calendar entries from selected calendars to wordpress
+- Assign categories based on source calendar
 - Event categories can be assigned via churchtool resources
 - The title, description and location are synced to wordpress
 - The image of the calendar entry is synced to wordpress
@@ -20,9 +21,9 @@ https://de.wordpress.org/plugins/events-manager/
 - Creates logfile in the plugin folder, configurable log levels
 
 ### Room for improvement (and/or missing features)
-- Assign categories based on calendar (High priority)
 - Use plugin versioning
 - Build wordpress package via github actions
+- Handle recurrence of events (perhaps)
 - Configure log level from wordpress UI
 - Show log in wordpress UI
 - Take event information over to wordpress

@@ -30,8 +30,8 @@ $errorMessage= null;
 $options =  get_option('ctwpsync_options');
 
 // Make sure it's configured, else do nothing
-if(empty($options) || empty($options['url'])){
-    logError("No sync options found, doing nothing");
+if(empty($options) || empty($options['url']) || empty($options['apitoken'])){
+    logError("No sync options found, (url and/or api token missing), doing nothing");
     return;
 }
 $startTimestamp= Date('Y-m-d H:i:s');
@@ -44,6 +44,28 @@ try
     CTConfig::setApiKey($apiToken);
     CTConfig::validateConfig();
     $calendars= $options['ids'];
+    $calendars_categories= $options['ids_categories'];
+    $calendars_categories_mapping= [];
+
+    $i = 0;
+    while($i < count($calendars))
+    {
+        if ($i < count($calendars_categories)) {
+            if (isset($calendars_categories[$i])) {
+                $calendars_categories_mapping[$calendars[$i]]=  $calendars_categories[$i];
+            } else {
+                $calendars_categories_mapping[$calendars[$i]]=  null;
+            }
+        } else {
+            logInfo("Calendar categories maping out of range ".$i);
+            logInfo(serialize($calendars));
+            logInfo(serialize($calendars_categories));
+            $calendars_categories_mapping[$calendars[$i]]=  null;
+        }
+        $i++;
+    } 
+    logDebug("Categories mapping via calendar ID's: ".serialize($calendars_categories_mapping));
+
     $pastDays= $options['import_past'];
     $futureDays=  $options['import_future'];
     $resourcetype_for_categories= $options['resourcetype_for_categories'];
@@ -67,7 +89,7 @@ try
         ->where('to', $toDate)
         ->get();
     foreach ($result as $key => $ctCalEntry) {
-        processCalendarEntry($ctCalEntry, $resourcetype_for_categories);
+        processCalendarEntry($ctCalEntry, $calendars_categories_mapping, $resourcetype_for_categories);
     }
     // Now we will have to handle all wp events which are no longer visible
     // from CT (Either deleted or moved in another calendar)
@@ -76,9 +98,9 @@ try
     $endTimestamp= Date('Y-m-d H:i:s');
     $sdt= new DateTime($startTimestamp);
     $edt= new DateTime($endTimestamp);
-    set_transient('churchtools_wpcalendarsync_lastupdated',$startTimestamp.' to '.$endTimestamp, 24*HOUR_IN_SECONDS);
+    set_transient('churchtools_wpcalendarsync_lastupdated',$startTimestamp.' to '.$endTimestamp, 0);
     $interval = $edt->diff($sdt);
-    set_transient('churchtools_wpcalendarsync_lastsyncduration',$interval->format('%H:%I:%S'), 24*HOUR_IN_SECONDS);
+    set_transient('churchtools_wpcalendarsync_lastsyncduration',$interval->format('%H:%I:%S'), 0);
 }
 catch (Exception $e)
 {
@@ -93,10 +115,12 @@ logInfo("End sync cycle ".Date('Y-m-d H:i:s'));
  * 
  * Process a single calendar entry from ct and create or update wp event
  * 
- * @param type $ctCalEntry a CT calendar entry to be analyzed and processed
+ * @param Appointment $ctCalEntry a CT calendar entry to be analyzed and processed
+ * @param array $calendars_categories_mapping Array with category for calendar mapping
+ * @param int $resourcetype_for_categories Us this resource type for categories mapping
  * 
  */
-function processCalendarEntry(Appointment $ctCalEntry, int $resourcetype_for_categories) {
+function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categories_mapping, int $resourcetype_for_categories) {
     if (!$ctCalEntry->getIsInternal()) {
         logDebug("Caption: ".$ctCalEntry->getCaption()." StartDate: ".$ctCalEntry->getStartDate()." EndDate: ".$ctCalEntry->getEndDate()." Is allday: ".$ctCalEntry->getAllDay());
         //logDebug("Object: ".serialize($ctCalEntry));
@@ -111,7 +135,7 @@ function processCalendarEntry(Appointment $ctCalEntry, int $resourcetype_for_cat
         $newCtImageID= null;
         if (sizeof($result) == 1) {
             // We did already map it
-            logInfo("Found mapping for ct id: ".$ctCalEntry->getId());
+            logDebug("Found mapping for ct id: ".$ctCalEntry->getId()." so already synched in the past");
             $event= em_get_event($result[0]->wp_id);
             if ($event->ID != null ){
                 // OK, still existing, make sure it's not in trash
@@ -123,7 +147,7 @@ function processCalendarEntry(Appointment $ctCalEntry, int $resourcetype_for_cat
                     $event= new EM_Event(false);
                     $addMode= true;
                 } else {
-                    logDebug("Event status ". $event->event_status);
+                    logDebug("Event status in wordpress ". $event->event_status);
                     $addMode= false;
                     $ct_image_id= $result[0]->ct_image_id;
                     $wp_image_id= $result[0]->wp_image_id;
@@ -137,7 +161,7 @@ function processCalendarEntry(Appointment $ctCalEntry, int $resourcetype_for_cat
                 $addMode= true;
             }
         } else {
-            logDebug("No mapping for event found");
+            logDebug("No mapping for event found, so create a new one");
             $event= new EM_Event(false);
             $addMode= true;
         }
@@ -223,7 +247,7 @@ function processCalendarEntry(Appointment $ctCalEntry, int $resourcetype_for_cat
             $wpdb->query($wpdb->prepare($sql));
         }
         // Handle event categories from resource type
-        updateEventCategories($resourcetype_for_categories, $ctCalEntry, $event);
+        updateEventCategories($calendars_categories_mapping, $resourcetype_for_categories, $ctCalEntry, $event);
     } else {
         // Perhaps we need to remove it, since visibility has changed
         global $wpctsync_tablename;
@@ -304,7 +328,7 @@ function getCreateLocation(Address $appointmentAddress) {
  * @param CTApi\Models\Calendars\Appointment\Appointment $ctCalEntry
  * @param EM_Event $event
  */
-function updateEventCategories(int $resourcetype_for_categories, Appointment $ctCalEntry, EM_Event $event) {
+function updateEventCategories(array $calendars_categories_mapping, int $resourcetype_for_categories, Appointment $ctCalEntry, EM_Event $event) {
     if ($resourcetype_for_categories > 0) {
         logDebug("Using resources of type ".$resourcetype_for_categories." for wordpress categories");
         // So we retrieve the resources booked with this calendar entry
@@ -316,6 +340,13 @@ function updateEventCategories(int $resourcetype_for_categories, Appointment $ct
         $combinedAppointment= CombinedAppointmentRequest::forAppointment($ctCalEntry->getCalendar()->getId(), $ctCalEntry->getId(), $sDate->format('Y-m-d'))->get();
         // logDebug("Got combined appointment ".serialize($combinedAppointment));
         $desiredCategories= [];
+        if ($calendars_categories_mapping[$ctCalEntry->getCalendar()->getId()] != null) {
+            // Add category via calendar id source
+            logDebug('Found category by calendar ID '.$calendars_categories_mapping[$ctCalEntry->getCalendar()->getId()]);
+            array_push($desiredCategories, $calendars_categories_mapping[$ctCalEntry->getCalendar()->getId()]);
+        } else {
+            logDebug('No category found by calendar ID '. $ctCalEntry->getCalendar()->getId().' '.serialize($calendars_categories_mapping));
+        }
         if ($combinedAppointment != null ) {
             // Now process the resource bookings (if any)
             $allBookings= $combinedAppointment->getBookings();
