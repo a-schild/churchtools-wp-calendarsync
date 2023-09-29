@@ -13,8 +13,8 @@
  * Version:           0.1.0
  * Author:            André Schild
  * Author URI:        https://github.com/a-schild/churchtools-wp-calendarsync/
- * License:           Apache License Version 2.0
- * License URI:       https://www.apache.org/licenses/LICENSE-2.0.txt
+ * License:           GPLv2 or later 
+ * License URI:       https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
  * Text Domain:       ctwpsync
  * Domain Path:       /languages
  * Tags:              churchtools, events manager, sync, calendar
