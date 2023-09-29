@@ -93,7 +93,8 @@ node main.js -r
 - You can organize the event categories (Once created by the sync process)
   in hierarchical way in wordpress
   - The sync process only looks at the category name for matching
+- The wp-cron job runs every hour
+  - If you wish to trigger it manually, you can install this plugin
+    https://wordpress.org/plugins/wp-crontrol/
 
 (c) 2023 Aarboard a.schild@aarboard.ch
-
-  

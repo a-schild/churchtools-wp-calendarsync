@@ -29,11 +29,25 @@ $hasError= false;
 $errorMessage= null;
 $options =  get_option('ctwpsync_options');
 
+if (!is_plugin_active('events-manager/events-manager.php')) {
+    logError("We need an activated events manager plugin, doing nothing");
+    return;
+}
 // Make sure it's configured, else do nothing
 if(empty($options) || empty($options['url']) || empty($options['apitoken'])){
     logError("No sync options found, (url and/or api token missing), doing nothing");
     return;
 }
+if (get_current_user_id() == 0) {
+    logError("No user specified, doing nothing since events needs an owner");
+    return;
+}
+
+if (!is_user_logged_in()) {
+    logError("User not logged in, doing nothing since events needs an owner");
+    return;
+}
+
 $startTimestamp= Date('Y-m-d H:i:s');
 logInfo("Start sync cycle ".$startTimestamp);
 try
@@ -161,7 +175,7 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
                 $addMode= true;
             }
         } else {
-            logDebug("No mapping for event found, so create a new one");
+            logDebug("No mapping for event ".$ctCalEntry->getId()." found, so create a new one");
             $event= new EM_Event(false);
             $addMode= true;
         }
@@ -184,7 +198,7 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
             logDebug("StartDate: ".$sDate);
             $event->event_start_date= $sDate;
             $event->event_end_date= $eDate;
-            $event->event_all_day= true;
+            $event->event_all_day= 1;
         } else {
             $sDate= \DateTime::createFromFormat('Y-m-d\TH:i:s+', $ctCalEntry->getStartDate(), new DateTimeZone('UTC'));
             // Set to WP location time zone
@@ -198,7 +212,7 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
             logDebug("StartTime: ".$sDate->format('H:i:s'));
             $event->event_start_time= $sDate->format('H:i:s');
             $event->event_end_time= $eDate->format('H:i:s');
-            $event->event_all_day= false;
+            $event->event_all_day= 0;
         }
         $imageURL= null;
         $imageName= null;
@@ -209,7 +223,7 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
                 $imageURL= $ctCalEntry->getImage()->getFileUrl();
                 $imageName= $ctCalEntry->getImage()->getName();
 
-                logDebug("Add/updateimage ". $ctCalEntry->getImage()->getFileUrl()." filename: ".$ctCalEntry->getImage()->getName());
+                logDebug("Found image in CT: ". $ctCalEntry->getImage()->getFileUrl()." filename: ".$ctCalEntry->getImage()->getName());
 //                if (has_post_thumbnail($event->id)) {
 //                    logDebug("Has thumbnail");
 //                    $image= get_post_thumbnail_id( $event->id, 'full' );
@@ -221,33 +235,37 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
             }
         }
         $saveResult= $event->save();
-        logInfo("Saved ct event id: ".$ctCalEntry->getId(). " WP event ID ".$event->event_id." post id: ".$event->ID." result: ".$saveResult);
-        if ($imageURL != null) {
-            $attachmentID= setEventImage($imageURL, $imageName, $event->ID);
-            logDebug("Attached image ".$imageName." from ".$imageURL." as attachement ".$attachmentID);
-        }
-        if ($addMode) {
-            // Keeps track of ct event id and wp event id for subsequent updates+deletions
-            $wpdb->insert($wpctsync_tablename, array(
-                'ct_id' => $ctCalEntry->getId(),
-                'wp_id' => $event->event_id,
-                'ct_image_id' => $newCtImageID,
-                'last_seen' => date('Y-m-d H:i:s'),
-                'event_start' => $ctCalEntry->getStartDate(),
-                'event_end' => $ctCalEntry->getEndDate()
-            ));
-        } else {
-            // Update last seen time stamp to flag as "still existing"
-            $sql= "UPDATE ".$wpctsync_tablename.
-                " SET last_seen='".date('Y-m-d H:i:s')."' ";
-            if ($newCtImageID != null) {
-                $sql.= ", ct_image_id=".$newCtImageID." ";
+        if ($saveResult) {
+            logInfo("Saved ct event id: ".$ctCalEntry->getId(). " WP event ID ".$event->event_id." post id: ".$event->ID." result: ".$saveResult." serialized: ".serialize($saveResult) );
+            if ($imageURL != null) {
+                $attachmentID= setEventImage($imageURL, $imageName, $event->ID);
+                logDebug("Attached image ".$imageName." from ".$imageURL." as attachement ".$attachmentID);
             }
-            $sql.= "WHERE ct_id=".$ctCalEntry->getId();
-            $wpdb->query($wpdb->prepare($sql));
+            if ($addMode) {
+                // Keeps track of ct event id and wp event id for subsequent updates+deletions
+                $wpdb->insert($wpctsync_tablename, array(
+                    'ct_id' => $ctCalEntry->getId(),
+                    'wp_id' => $event->event_id,
+                    'ct_image_id' => $newCtImageID,
+                    'last_seen' => date('Y-m-d H:i:s'),
+                    'event_start' => $ctCalEntry->getStartDate(),
+                    'event_end' => $ctCalEntry->getEndDate()
+                ));
+            } else {
+                // Update last seen time stamp to flag as "still existing"
+                $sql= "UPDATE ".$wpctsync_tablename.
+                    " SET last_seen='".date('Y-m-d H:i:s')."' ";
+                if ($newCtImageID != null) {
+                    $sql.= ", ct_image_id=".$newCtImageID." ";
+                }
+                $sql.= "WHERE ct_id=".$ctCalEntry->getId();
+                $wpdb->query($wpdb->prepare($sql));
+            }
+            // Handle event categories from resource type
+            updateEventCategories($calendars_categories_mapping, $resourcetype_for_categories, $ctCalEntry, $event);
+        } else {
+            logError("Saving new event failed for ct id: ".$ctCalEntry->getId() );
         }
-        // Handle event categories from resource type
-        updateEventCategories($calendars_categories_mapping, $resourcetype_for_categories, $ctCalEntry, $event);
     } else {
         // Perhaps we need to remove it, since visibility has changed
         global $wpctsync_tablename;

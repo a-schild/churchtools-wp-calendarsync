@@ -1,16 +1,40 @@
 <?php
 /**
-* Plugin Name: Churchtools WP Calendarsync
-* Plugin URI: https://www.ref-nidau.ch
-* Description: Chutchtools wordpress calendar sync to events manager.
-* Version: 0.1
-* Author: a-schild
-* Author URI: https://www.ref-nidau.ch
-**/
+ * 
+ *
+ * @link              https://github.com/a-schild/churchtools-wp-calendarsync
+ * @since             0.1.0
+ * @package           Ctwpsync
+ *
+ * @wordpress-plugin
+ * Plugin Name:       Churchtools WP Calendarsync
+ * Plugin URI:        https://github.com/a-schild/churchtools-wp-calendarsync
+ * Description:       Churchtools wordpress calendar sync to events manager, requires "Events Manager" plugin. The sync is scheduled every hour to update WP events from churchtool.
+ * Version:           0.1.0
+ * Author:            André Schild
+ * Author URI:        https://github.com/a-schild/churchtools-wp-calendarsync/
+ * License:           Apache License Version 2.0
+ * License URI:       https://www.apache.org/licenses/LICENSE-2.0.txt
+ * Text Domain:       ctwpsync
+ * Domain Path:       /languages
+ * Tags:              churchtools, events manager, sync, calendar
+ * Requires at least: 5.8
+ * Tested up to:      6.3.1
+ * Stable tag:        main
+ * 
+ */
 
 
 add_action ('admin_menu', 'ctwpsync_setup_menu'  );
 add_action('save_ctwpsync_settings', 'save_ctwpsync_settings' );
+
+/**
+ * Currently plugin version.
+ * Start at version 1.0.0 and use SemVer - https://semver.org
+ * Rename this for your plugin and update it as you release new versions.
+ */
+define( 'CTWPSYNC_VERSION', '0.1.0' );
+
 function ctwpsync_setup_menu() {
 	add_options_page('ChurchTools Calendar Importer','ChurchTools Calsync','manage_options','churchtools-wpcalendarsync','ctwpsync_dashboard');
 	add_action('admin_init', 'register_ctwpsync_settings' );
@@ -39,7 +63,16 @@ function ctwpsync_dashboard() {
 	$lastupdated = get_transient('churchtools_wpcalendarsync_lastupdated');
 	$lastsyncduration = get_transient('churchtools_wpcalendarsync_lastsyncduration');
 	// $saved_data = $saved_data ? unserialize($saved_data) : null ;
-	include_once (plugin_dir_path( __FILE__ ) .  'dashboard/dashboard_view.php');
+    if (is_plugin_active('events-manager/events-manager.php')) {
+        include_once (plugin_dir_path( __FILE__ ) .  'dashboard/dashboard_view.php');
+    } else {
+        echo "<div>";
+        echo "<h2>ChurchTools Calendar Sync requires an active 'Events Manager' plugin</h2>";
+        echo "<p>Please install and activate it first</p>";
+        echo "<p><a href='https://de.wordpress.org/plugins/events-manager/'>https://de.wordpress.org/plugins/events-manager/</a></p>";
+        echo "</div>";
+
+    }
 }
 
 // this function will handle the ajax call
@@ -81,14 +114,19 @@ function save_ctwpsync_settings() {
 register_activation_hook( __FILE__, 'ctwpsync_activation' );
 function ctwpsync_activation() {
 	if ( ! wp_next_scheduled ( 'ctwpsync_hourly_event' ) ) {
-		wp_schedule_event( current_time( 'timestamp' ), 'hourly', 'ctwpsync_hourly_event' );
+        // Store the logged in user, so the cron job works as the same user
+        $args = [ is_user_logged_in(), wp_get_current_user() ];
+		wp_schedule_event( current_time( 'timestamp' ), 'hourly', 'ctwpsync_hourly_event', $args);
 	}
 }
 /**
  * Hook the function to run every hour
+ * 
+ * We need to pass in the user
  */
-add_action('ctwpsync_hourly_event', 'do_this_ctwpsync_hourly');
-function do_this_ctwpsync_hourly() {
+add_action('ctwpsync_hourly_event', 'do_this_ctwpsync_hourly', 10, 2);
+function do_this_ctwpsync_hourly($is_user_logged_in, $current_user) {
+    wp_set_current_user($current_user);
     do_action('ctwpsync_includeChurchcalSync');
 	if( function_exists('ctwpsync_getUpdatedCalendarEvents')) {
 		$result = ctwpsync_getUpdatedCalendarEvents();
@@ -106,7 +144,6 @@ function ctwpsync_includeChurchcalSync(){
  */
 register_deactivation_hook( __FILE__, 'ctwpsync_deactivation' );
 function ctwpsync_deactivation() {
-	wp_clear_scheduled_hook( 'ctwpsync_daily_event' );
 	wp_clear_scheduled_hook( 'ctwpsync_hourly_event' );
 }
 
@@ -133,3 +170,18 @@ function ctwpsync_initplugin()
     dbDelta($sql);
 }
 add_action( 'plugins_loaded', 'ctwpsync_initplugin' );
+
+//function ctwpsync_cron_schedules($schedules){
+//    if(!isset($schedules["5min"])){
+//        $schedules["5min"] = array(
+//            'interval' => 5*60,
+//            'display' => __('Once every 5 minutes'));
+//    }
+//    if(!isset($schedules["30min"])){
+//        $schedules["30min"] = array(
+//            'interval' => 30*60,
+//            'display' => __('Once every 30 minutes'));
+//    }
+//    return $schedules;
+//}
+//add_filter('cron_schedules','ctwpsync_cron_schedules');
