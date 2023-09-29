@@ -18,12 +18,12 @@ jobs:
       - name: Create artifact
         uses: montudor/action-zip@v0.1.0
         with:
-          args: zip -X -r build/churchtools-wp-calendarsync.zip . -x *.git* 
+          args: zip -X -r ${{ github.event.repository.name }}.zip . -x *.git* 
       - name: Release
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: build/${{ github.event.repository.name }}.zip
+          files: ${{ github.event.repository.name }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 #      - name: Upload artifact
