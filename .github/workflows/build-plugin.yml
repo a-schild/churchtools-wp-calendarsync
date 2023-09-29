@@ -1,11 +1,8 @@
 name: Generate Installable Plugin, and Upload as Release Asset
 on:
   release:
-    types: [published]
-    # Triggers the workflow on push for the master branch
-  push:
-    # branches: [ main ]
-    branches: [ develop ]
+    types:
+      - created
 
 jobs:
   build:
