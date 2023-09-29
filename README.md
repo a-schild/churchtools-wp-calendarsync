@@ -21,12 +21,12 @@ https://de.wordpress.org/plugins/events-manager/
 - Creates logfile in the plugin folder, configurable log levels
 
 ### Room for improvement (and/or missing features)
-- Use plugin versioning
 - Build wordpress package via github actions
 - Handle recurrence of events (perhaps)
 - Configure log level from wordpress UI
 - Show log in wordpress UI
 - Take event information over to wordpress
+- Resize large images to match template thumbnail sizes
 - Simpler configuration of the plugin (More workflow and more robust)
 - Fetch token via UI login/api call to churchtool
 - Notify someone about sync problems
