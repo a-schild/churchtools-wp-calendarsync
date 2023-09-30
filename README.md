@@ -46,10 +46,8 @@ event manager, the church tool sync process will not touch these.
 
 ## Installation of the plugin
 - Make sure to have the events manager plugin installed and activated
-- Checkout the source from to the wp-content/plugins folder
-  in a folder named churchtools-wpcalendarsync
-- Change to this folder
-- Install the dependencies with `composer install`
+- Download the plugin from https://github.com/a-schild/churchtools-wp-calendarsync/releases
+- Upload and activate it in your wordpress installation
 
 ## Configuration of the plugin
 - We recommend to create a ctsync or similar wp account,

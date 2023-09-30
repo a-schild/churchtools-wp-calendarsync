@@ -3,14 +3,14 @@
  * 
  *
  * @link              https://github.com/a-schild/churchtools-wp-calendarsync
- * @since             0.1.0
+ * @since             1.0.0
  * @package           Ctwpsync
  *
  * @wordpress-plugin
  * Plugin Name:       Churchtools WP Calendarsync
  * Plugin URI:        https://github.com/a-schild/churchtools-wp-calendarsync
  * Description:       Churchtools wordpress calendar sync to events manager, requires "Events Manager" plugin. The sync is scheduled every hour to update WP events from churchtool.
- * Version:           0.1.0
+ * Version:           1.0.0
  * Author:            André Schild
  * Author URI:        https://github.com/a-schild/churchtools-wp-calendarsync/
  * License:           GPLv2 or later 
