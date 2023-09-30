@@ -1,18 +1,19 @@
-name: Generate Installable Plugin, and Upload as Release Asset
-on:
-  release:
-    types: [published]
-    # Triggers the workflow on push for the master branch
+name: Releases
+
+on: 
   push:
-    branches: [ main, master ]
+    tags:
+    - '*'
 
 jobs:
   build:
-    name: Upload Release Asset
+    name: Build and Release Asset
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       - name: Build project
         run: |
           composer install --no-dev --optimize-autoloader
@@ -20,15 +21,13 @@ jobs:
       - name: Create artifact
         uses: montudor/action-zip@v0.1.0
         with:
-          args: zip -X -r build/churchtools-wp-calendarsync.zip . -x *.git* 
-#      - name: Upload artifact
-#        uses: actions/upload-artifact@v2
-#        with:
-#            name: graphql-api
-#            path: build/graphql-api.zip
-#      - name: Upload to release
-#        uses: JasonEtco/upload-to-release@master
-#        with:
-#          args: build/graphql-api.zip application/zip
-#        env:
-#          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          args: zip -X -r ${{ github.event.repository.name }}.zip . -x *.git* 
+      - name: Upload binaries to release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ${{ github.event.repository.name }}.zip
+          asset_name: churchtools-wp-sync.zip
+          tag: ${{ github.ref }}
+          overwrite: true
+#          body: "This is my release text"
