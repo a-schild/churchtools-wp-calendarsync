@@ -1,9 +1,7 @@
 # churchtools-wp-calendarsync changelog
 
-## 2023-09-30
-- Automatic release build via github actions when
-  tag is pushed
-- Use correct composer.lock file for churchtools api
+## 2023-10-16
+- Correctly handle repeating events
 
 ## 2023-09-29
 - Change licence from Apache 2.0 to GNU GPL 2
