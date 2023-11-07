@@ -155,7 +155,7 @@ function ctwpsync_initplugin()
     $sql = "CREATE TABLE IF NOT EXISTS ".$table_name."(
             id mediumint(9) NOT NULL AUTO_INCREMENT,
             ct_id mediumint(9) NOT NULL,
-            ct_repeating mediumin(9) NOT NULL,
+            ct_repeating mediumint(9) NOT NULL,
             wp_id mediumint(9) NOT NULL,
             ct_image_id mediumint(9) NOT NULL,
             wp_image_id mediumint(9) NOT NULL,
