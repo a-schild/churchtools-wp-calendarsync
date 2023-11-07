@@ -1,5 +1,7 @@
 # churchtools-wp-calendarsync changelog
 ## 2023-11-07
+- Release v1.0.3
+- Fix versioning
 - Fix sql data type error on new installations
 - Release v1.0.2
 
