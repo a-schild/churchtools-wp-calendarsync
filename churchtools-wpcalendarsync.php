@@ -10,7 +10,7 @@
  * Plugin Name:       Churchtools WP Calendarsync
  * Plugin URI:        https://github.com/a-schild/churchtools-wp-calendarsync
  * Description:       Churchtools wordpress calendar sync to events manager, requires "Events Manager" plugin. The sync is scheduled every hour to update WP events from churchtool.
- * Version:           1.0.3
+ * Version:           1.0.4
  * Author:            André Schild
  * Author URI:        https://github.com/a-schild/churchtools-wp-calendarsync/
  * License:           GPLv2 or later 
@@ -33,7 +33,7 @@ add_action('save_ctwpsync_settings', 'save_ctwpsync_settings' );
  * Start at version 1.0.0 and use SemVer - https://semver.org
  * Rename this for your plugin and update it as you release new versions.
  */
-define( 'CTWPSYNC_VERSION', '1.0.3' );
+define( 'CTWPSYNC_VERSION', '1.0.4' );
 
 function ctwpsync_setup_menu() {
 	add_options_page('ChurchTools Calendar Importer','ChurchTools Calsync','manage_options','churchtools-wpcalendarsync','ctwpsync_dashboard');
@@ -155,12 +155,12 @@ function ctwpsync_initplugin()
     $sql = "CREATE TABLE IF NOT EXISTS ".$table_name."(
             id mediumint(9) NOT NULL AUTO_INCREMENT,
             ct_id mediumint(9) NOT NULL,
-            ct_repeating mediumint(9) NOT NULL,
+            ct_repeating mediumint(9),
             wp_id mediumint(9) NOT NULL,
-            ct_image_id mediumint(9) NOT NULL,
-            wp_image_id mediumint(9) NOT NULL,
-            ct_flyer_id mediumint(9) NOT NULL,
-            wp_flyer_id mediumint(9) NOT NULL,
+            ct_image_id mediumint(9),
+            wp_image_id mediumint(9),
+            ct_flyer_id mediumint(9),
+            wp_flyer_id mediumint(9),
             last_seen datetime NOT NULL,
             event_start datetime NOT NULL,
             event_end datetime NOT NULL,
@@ -176,7 +176,7 @@ function ctwpsync_initplugin()
         // OK, new table format
     } else {
         // Need to add repeating column and change unique constraint on ct_id index
-        $sql= "alter table `".$table_name."` ADD COLUMN `ct_repeating` TINYINT NULL DEFAULT '0';";
+        $sql= "alter table `".$table_name."` ADD COLUMN `ct_repeating` mediumint(9) NULL DEFAULT '0';";
         $wpdb->query($sql);
         $sql= "alter table `".$table_name."` DROP INDEX `ct_id`;";
         $wpdb->query($sql);

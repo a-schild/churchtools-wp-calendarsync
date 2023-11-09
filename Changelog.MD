@@ -1,4 +1,8 @@
 # churchtools-wp-calendarsync changelog
+## 2023-11-09
+- Release v1.0.4
+- Allow NULL values in more columns
+
 ## 2023-11-07
 - Release v1.0.3
 - Fix versioning
