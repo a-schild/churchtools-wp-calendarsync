@@ -379,6 +379,16 @@ function getCreateLocation(Address $appointmentAddress) {
  * @param EM_Event $event
  */
 function updateEventCategories(array $calendars_categories_mapping, int $resourcetype_for_categories, Appointment $ctCalEntry, EM_Event $event) {
+
+	$desiredCategories= [];
+	if ($calendars_categories_mapping[$ctCalEntry->getCalendar()->getId()] != null) {
+		// Add category via calendar id source
+		logDebug('Found category by calendar ID '.$calendars_categories_mapping[$ctCalEntry->getCalendar()->getId()]);
+		array_push($desiredCategories, $calendars_categories_mapping[$ctCalEntry->getCalendar()->getId()]);
+	} else {
+		logDebug('No category found by calendar ID '. $ctCalEntry->getCalendar()->getId().' '.serialize($calendars_categories_mapping));
+	}
+
     if ($resourcetype_for_categories > 0) {
         logDebug("Using resources of type ".$resourcetype_for_categories." for wordpress categories");
         // So we retrieve the resources booked with this calendar entry
@@ -389,14 +399,6 @@ function updateEventCategories(array $calendars_categories_mapping, int $resourc
         }
         $combinedAppointment= CombinedAppointmentRequest::forAppointment($ctCalEntry->getCalendar()->getId(), $ctCalEntry->getId(), $sDate->format('Y-m-d'))->get();
         // logDebug("Got combined appointment ".serialize($combinedAppointment));
-        $desiredCategories= [];
-        if ($calendars_categories_mapping[$ctCalEntry->getCalendar()->getId()] != null) {
-            // Add category via calendar id source
-            logDebug('Found category by calendar ID '.$calendars_categories_mapping[$ctCalEntry->getCalendar()->getId()]);
-            array_push($desiredCategories, $calendars_categories_mapping[$ctCalEntry->getCalendar()->getId()]);
-        } else {
-            logDebug('No category found by calendar ID '. $ctCalEntry->getCalendar()->getId().' '.serialize($calendars_categories_mapping));
-        }
         if ($combinedAppointment != null ) {
             // Now process the resource bookings (if any)
             $allBookings= $combinedAppointment->getBookings();
@@ -409,28 +411,28 @@ function updateEventCategories(array $calendars_categories_mapping, int $resourc
                 }
             }
         }
-        if (sizeof($desiredCategories) > 0) {
-            $wpDesiredCategories= [];
-            foreach ($desiredCategories as $dcKey => $desiredCategory) {
-                $taxFilter = array( 'taxonomy' => EM_TAXONOMY_CATEGORY, 'name' => $desiredCategory, 'hide_empty' => false);
-                $wpCategories= get_terms($taxFilter);
-                // logDebug("Results: ".sizeof($wpCategories));
-                if (sizeof($wpCategories) >= 1) {
-                    logDebug("Found matching wp category: ".$desiredCategory . " wp: ".$wpCategories[0]->term_id);
-                    array_push($wpDesiredCategories, $wpCategories[0]->term_id);
-                } else {
-                    logInfo("Need to create category: ".$desiredCategory);
-                    $newTerm= wp_insert_term($desiredCategory, EM_TAXONOMY_CATEGORY);
-                    if (is_array($newTerm)) {
-                        array_push($wpDesiredCategories, $newTerm["term_id"]);
-                    } else {
-                        logError("Failed inserting new event category ".$desiredCategory." Error: ".$newTerm->get_error_message());
-                    }
-                }
-                wp_set_post_terms($event->ID, $wpDesiredCategories, EM_TAXONOMY_CATEGORY);
-            }
-        }
-    }
+	}
+	if (sizeof($desiredCategories) > 0) {
+		$wpDesiredCategories= [];
+		foreach ($desiredCategories as $dcKey => $desiredCategory) {
+			$taxFilter = array( 'taxonomy' => EM_TAXONOMY_CATEGORY, 'name' => $desiredCategory, 'hide_empty' => false);
+			$wpCategories= get_terms($taxFilter);
+			// logDebug("Results: ".sizeof($wpCategories));
+			if (sizeof($wpCategories) >= 1) {
+				logDebug("Found matching wp category: ".$desiredCategory . " wp: ".$wpCategories[0]->term_id);
+				array_push($wpDesiredCategories, $wpCategories[0]->term_id);
+			} else {
+				logInfo("Need to create category: ".$desiredCategory);
+				$newTerm= wp_insert_term($desiredCategory, EM_TAXONOMY_CATEGORY);
+				if (is_array($newTerm)) {
+					array_push($wpDesiredCategories, $newTerm["term_id"]);
+				} else {
+					logError("Failed inserting new event category ".$desiredCategory." Error: ".$newTerm->get_error_message());
+				}
+			}
+			wp_set_post_terms($event->ID, $wpDesiredCategories, EM_TAXONOMY_CATEGORY);
+		}
+	}
 }
 
 /**

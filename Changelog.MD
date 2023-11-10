@@ -1,4 +1,10 @@
 # churchtools-wp-calendarsync changelog
+
+
+## 2023-11-10
+- Release v1.0.5
+- Fix branch condition to process categories when no resource type mapping is enabled
+
 ## 2023-11-09
 - Release v1.0.4
 - Allow NULL values in more columns
