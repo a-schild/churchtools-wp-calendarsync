@@ -148,7 +148,7 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
         } else {
             $sql= $wpdb->prepare('SELECT * FROM `'.$wpctsync_tablename.'` WHERE `ct_id` = %d ;', array($ctCalEntry->getId()));
         }
-        // logDebug(serialize($sql));
+        logDebug(serialize($sql));
         $result= $wpdb->get_results($sql);
         $addMode= false;
         $ct_image_id= null; // CT file id of image
@@ -261,7 +261,7 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
             }
             if ($addMode) {
                 // Keeps track of ct event id and wp event id for subsequent updates+deletions
-                $wpdb->insert($wpctsync_tablename, array(
+                if (!$wpdb->insert($wpctsync_tablename, array(
                     'ct_id' => $ctCalEntry->getId(),
                     'wp_id' => $event->event_id,
                     'ct_image_id' => $newCtImageID,
@@ -269,7 +269,10 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
                     'event_start' => $ctCalEntry->getStartDate(),
                     'event_end' => $ctCalEntry->getEndDate(),
                     'ct_repeating' => $isRepeating ? 1 : 0
-                ));
+                    ))) 
+                    {
+                        logError("Error inserting mapping, duplicates will occure ".$wpdb->last_error);
+                }
             } else {
                 // Update last seen time stamp to flag as "still existing"
                 $sql= "UPDATE ".$wpctsync_tablename.

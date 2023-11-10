@@ -2,6 +2,8 @@
 
 
 ## 2023-11-10
+- Release v1.0.6
+- DB column should not be unique, otherwise we can't save repeating events in mapping
 - Release v1.0.5
 - Fix branch condition to process categories when no resource type mapping is enabled
 
