@@ -144,7 +144,7 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
         global $wpdb;
         if ($isRepeating) {
             $sql= $wpdb->prepare('SELECT * FROM `'.$wpctsync_tablename.'` WHERE `ct_id` = %d and ct_repeating=1 '
-                . 'and event_start=%s ;', array($ctCalEntry->getId(), date_format( date_create($ctCalEntry->getStartDate()), 'Y-m-d H:i:s' )));
+                . "and event_start='%s' ;", array($ctCalEntry->getId(), date_format( date_create($ctCalEntry->getStartDate()), 'Y-m-d H:i:s' )));
         } else {
             $sql= $wpdb->prepare('SELECT * FROM `'.$wpctsync_tablename.'` WHERE `ct_id` = %d ;', array($ctCalEntry->getId()));
         }
@@ -297,7 +297,7 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
         global $wpctsync_tablename;
         global $wpdb;
         if ($isRepeating) {
-            $result= $wpdb->get_results(sprintf('SELECT * FROM `%2$s` WHERE `ct_id` = %d and event_start='.date_format( date_create($ctCalEntry->getStartDate()), 'Y-m-d H:i:s' ), $ctCalEntry->getId(), $wpctsync_tablename));
+            $result= $wpdb->get_results(sprintf("SELECT * FROM `%2$s` WHERE `ct_id` = %d and event_start='".date_format( date_create($ctCalEntry->getStartDate()), 'Y-m-d H:i:s' )."'", $ctCalEntry->getId(), $wpctsync_tablename));
         } else {
             $result= $wpdb->get_results(sprintf('SELECT * FROM `%2$s` WHERE `ct_id` = %d ', $ctCalEntry->getId(), $wpctsync_tablename));
         }
