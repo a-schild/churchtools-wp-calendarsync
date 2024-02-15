@@ -1,6 +1,10 @@
 # churchtools-wp-calendarsync changelog
 
 
+## 2024-02-15
+- Release v1.0.7
+  Fix issue with double quotes introduced in 1.0.6
+
 ## 2023-11-10
 - Release v1.0.6
 - DB column should not be unique, otherwise we can't save repeating events in mapping
