@@ -208,7 +208,25 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
         }
         $event->event_timezone= wp_timezone_string(); // Fix it to the default WP default timezone
         $event->event_name= $ctCalEntry->getCaption();
-        $event->post_content= $ctCalEntry->getInformation();
+
+        //Cache link and information
+        $ctLink = $ctCalEntry->getLink();
+        $ctInfo = $ctCalEntry->getInformation() ?: '';
+        //When the link is set, attempt to embed it into the information text
+        if (!empty($ctLink)) {
+            $count = 0;
+            //Tries to replace "#LINK:Link-Title:#" with a html link. $count is updated to check whether the call succeeded
+            $infoAndLink = preg_replace('/#LINK:(.*?):#/', '<a href="'.$ctLink.'">$1</a>', $ctInfo, 1, $count);
+            if ($count == 0) {
+                //Did not succeed, simply append the link at the end of the text
+                $infoAndLink = $ctInfo . "\n".'<a href="'.$ctLink.'">Link</a>';
+            }
+            //Set text with link in WP event
+            $event->post_content = $infoAndLink;
+        } else {
+            //Link is empty, just use the text
+            $event->post_content = $ctInfo;
+        }
         // $event->status= 0; // Publish entry would be 1 (Does not work at the moment...???)
         if ($ctCalEntry->getAllDay() === "true") {
             $sDate= $ctCalEntry->getStartDate();
