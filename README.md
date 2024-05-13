@@ -19,6 +19,7 @@ https://de.wordpress.org/plugins/events-manager/
 - Sync window is specified by n days in the past and m days in the future
 - Uses the modern REST api of churchtools
 - Creates logfile in the plugin folder, configurable log levels
+- Embedd event link on bottom of text or replace #LINK:<text>:# with the link
 
 ### Room for improvement (and/or missing features)
 - Build wordpress package via github actions
