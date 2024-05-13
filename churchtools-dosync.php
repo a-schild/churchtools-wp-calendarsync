@@ -211,15 +211,18 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
 
         //Cache link and information
         $ctLink = $ctCalEntry->getLink();
+        if (!(str_starts_with($ctLink, "http://") || (str_starts_with($ctLink, "https://")))) {
+            $ctLink = "https://" . $ctLink;
+        }
         $ctInfo = $ctCalEntry->getInformation() ?: '';
         //When the link is set, attempt to embed it into the information text
         if (!empty($ctLink)) {
             $count = 0;
             //Tries to replace "#LINK:Link-Title:#" with a html link. $count is updated to check whether the call succeeded
-            $infoAndLink = preg_replace('/#LINK:(.*?):#/', '<a href="'.$ctLink.'">$1</a>', $ctInfo, 1, $count);
+            $infoAndLink = preg_replace('/#LINK:(.*?):#/', '<a href="'.$ctLink.'" target="_blank">$1</a>', $ctInfo, 1, $count);
             if ($count == 0) {
                 //Did not succeed, simply append the link at the end of the text
-                $infoAndLink = $ctInfo . "\n".'<a href="'.$ctLink.'">Link</a>';
+                $infoAndLink = $ctInfo . "\n".'<a href="'.$ctLink.'" target="blank">Link</a>';
             }
             //Set text with link in WP event
             $event->post_content = $infoAndLink;

@@ -1,5 +1,8 @@
 # churchtools-wp-calendarsync changelog
 
+## 2024-05-13
+- Merged in link replacement pull request from JonFStr (Thanks)
+- Make sure link starts with http:// or https://, otherwise we prefix it with https://
 
 ## 2024-02-15
 - Release v1.0.7
