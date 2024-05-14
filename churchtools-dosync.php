@@ -10,6 +10,8 @@ use CTApi\Models\Calendars\Appointment\Address;
 use CTApi\Models\Calendars\Appointment\Appointment;
 use CTApi\Models\Calendars\Appointment\AppointmentRequest;
 use CTApi\Models\Calendars\CombinedAppointment\CombinedAppointmentRequest;
+use CTApi\Models\Calendars\CombinedAppointment\CombinedAppointment;
+use CTApi\Models\Common\File\FileRequest;
 
 CTLog::enableFileLog(); // enable logfile
 
@@ -156,6 +158,8 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
         $ct_flyer_id= null; // CT file id of flyer
         $wp_flyer_id= null; // WP flyer attachment id
         $newCtImageID= null;
+        $newCTFlyerId= null;
+        $newWPFlyerId= null;
         // logDebug(serialize($result));
         if (sizeof($result) == 1) {
             // We did already map it
@@ -211,18 +215,24 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
 
         //Cache link and information
         $ctLink = $ctCalEntry->getLink();
-        if (!(str_starts_with($ctLink, "http://") || (str_starts_with($ctLink, "https://")))) {
-            $ctLink = "https://" . $ctLink;
+        if (strlen(trim($ctLink)) > 0) {
+            if (!(str_starts_with($ctLink, "http://") || (str_starts_with($ctLink, "https://")))) {
+                $ctLink = "https://" . $ctLink;
+            }
         }
         $ctInfo = $ctCalEntry->getInformation() ?: '';
         //When the link is set, attempt to embed it into the information text
         if (!empty($ctLink)) {
+            logDebug("Found link to insert ".$ctLink);
             $count = 0;
             //Tries to replace "#LINK:Link-Title:#" with a html link. $count is updated to check whether the call succeeded
             $infoAndLink = preg_replace('/#LINK:(.*?):#/', '<a href="'.$ctLink.'" target="_blank">$1</a>', $ctInfo, 1, $count);
             if ($count == 0) {
                 //Did not succeed, simply append the link at the end of the text
-                $infoAndLink = $ctInfo . "\n".'<a href="'.$ctLink.'" target="blank">Link</a>';
+                $infoAndLink = $ctInfo . "<br>\n".'<a href="'.$ctLink.'" target="_blank">Link</a>';
+                logDebug("Adding link at the bottom of the text ".$ctLink);
+            } else {
+                logDebug("Replaced text $count time(s) with link ".$ctLink);
             }
             //Set text with link in WP event
             $event->post_content = $infoAndLink;
@@ -230,6 +240,59 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
             //Link is empty, just use the text
             $event->post_content = $ctInfo;
         }
+
+        if ($ctCalEntry->getAllDay() === "true") {
+            $sDate= \DateTime::createFromFormat('Y-m-d', $ctCalEntry->getStartDate(), new DateTimeZone('UTC'));
+        } else {
+            $sDate= \DateTime::createFromFormat('Y-m-d\TH:i:s+', $ctCalEntry->getStartDate(), new DateTimeZone('UTC'));
+        }
+        // Look into event and resources
+        $combinedAppointment= CombinedAppointmentRequest::forAppointment($ctCalEntry->getCalendar()->getId(), $ctCalEntry->getId(), $sDate->format('Y-m-d'))->get();
+        if ($combinedAppointment != null) {
+            logDebug("Found combined appointment");
+            $ctEvent= $combinedAppointment->getEvent();
+            if ($ctEvent != null) {
+                logDebug("Found associated event to appointment");
+                // Has associated event
+                $eventId= $ctEvent->getId();
+                if ($eventId != null ){
+                    logDebug("Found ct event with ID ".$eventId);
+                    $eventFiles= FileRequest::forEvent($eventId)->get();
+                    if ($eventFiles != null) {
+                        foreach ($eventFiles as $ctFile) {
+                            if ($ctFile->getName() != null && str_contains(strtolower($ctFile->getName()), "flyer")) {
+                                logInfo("Found flyer to attach ".$ctFile->getId()." with name ". $ctFile->getName(). " fileURL: ".$ctFile->getFileUrl());
+                                if ($ctFile->getId() == $ct_flyer_id && $wp_flyer_id != null) {
+                                    // Already found and mapped
+                                    $event->post_content= addFlyerLink($event->post_content, $wp_flyer_id);
+                                } else {
+                                    // Download from CT and add to media library
+                                    $tmpFlyer= sys_get_temp_dir().DIRECTORY_SEPARATOR.$ctFile->getId();
+                                    if (!is_dir($tmpFlyer)) {
+                                        mkdir($tmpFlyer);
+                                    }
+                                    $fileResult= $ctFile->downloadToPath($tmpFlyer);
+                                    $tmpFlyerFile= $tmpFlyer. DIRECTORY_SEPARATOR . $ctFile->getName();
+                                    logInfo("Downloaded to ".$fileResult." ".$tmpFlyerFile);
+                                    // TODO: Check if we already have this file in WP, otherwise upload it
+                                    // Then attach a link to the file to the event content
+                                    // media_handle_sideload see below
+                                    $newWPFlyerId= uploadFromLocalFile($tmpFlyerFile, $ctFile->getName());
+                                    if ($newWPFlyerId) {
+                                        $event->post_content= addFlyerLink($event->post_content, $newWPFlyerId);
+                                    } else {
+                                        logError("Error in media wp upload");
+                                    }
+                                }
+                                // Only the first attachment with Flyer in the name
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // $event->status= 0; // Publish entry would be 1 (Does not work at the moment...???)
         if ($ctCalEntry->getAllDay() === "true") {
             $sDate= $ctCalEntry->getStartDate();
@@ -286,6 +349,8 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
                     'ct_id' => $ctCalEntry->getId(),
                     'wp_id' => $event->event_id,
                     'ct_image_id' => $newCtImageID,
+                    'ct_flyer_id' => $newCTFlyerId,
+                    'wp_flyer_id' => $newWPFlyerId,
                     'last_seen' => date('Y-m-d H:i:s'),
                     'event_start' => $ctCalEntry->getStartDate(),
                     'event_end' => $ctCalEntry->getEndDate(),
@@ -301,6 +366,12 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
                 if ($newCtImageID != null) {
                     $sql.= ", ct_image_id=".$newCtImageID." ";
                 }
+                if ($newCTFlyerId!= null) {
+                    $sql.= ", ct_flyer_id=".$newCTFlyerId." ";
+                }
+                if ($newWPFlyerId != null) {
+                    $sql.= ", wp_flyer_id=".$newWPFlyerId." ";
+                }
                 $sql.= "WHERE ct_id=".$ctCalEntry->getId();
                 if ($isRepeating ) {
                     $sql.= " AND event_start='".date_format( date_create($ctCalEntry->getStartDate()), 'Y-m-d H:i:s' ). " ';";
@@ -309,7 +380,7 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
                 // logDebug(serialize($sql));
             }
             // Handle event categories from resource type
-            updateEventCategories($calendars_categories_mapping, $resourcetype_for_categories, $ctCalEntry, $event);
+            updateEventCategories($calendars_categories_mapping, $resourcetype_for_categories, $ctCalEntry, $event, $combinedAppointment);
         } else {
             logError("Saving new event failed for ct id: ".$ctCalEntry->getId() );
         }
@@ -401,8 +472,9 @@ function getCreateLocation(Address $appointmentAddress) {
  * @param int $resourcetype_for_categories
  * @param CTApi\Models\Calendars\Appointment\Appointment $ctCalEntry
  * @param EM_Event $event
+ * 
  */
-function updateEventCategories(array $calendars_categories_mapping, int $resourcetype_for_categories, Appointment $ctCalEntry, EM_Event $event) {
+function updateEventCategories(array $calendars_categories_mapping, int $resourcetype_for_categories, Appointment $ctCalEntry, EM_Event $event, CombinedAppointment $combinedAppointment)  {
 
 	$desiredCategories= [];
 	if ($calendars_categories_mapping[$ctCalEntry->getCalendar()->getId()] != null) {
@@ -416,12 +488,6 @@ function updateEventCategories(array $calendars_categories_mapping, int $resourc
     if ($resourcetype_for_categories > 0) {
         logDebug("Using resources of type ".$resourcetype_for_categories." for wordpress categories");
         // So we retrieve the resources booked with this calendar entry
-        if ($ctCalEntry->getAllDay() === "true") {
-            $sDate= \DateTime::createFromFormat('Y-m-d', $ctCalEntry->getStartDate(), new DateTimeZone('UTC'));
-        } else {
-            $sDate= \DateTime::createFromFormat('Y-m-d\TH:i:s+', $ctCalEntry->getStartDate(), new DateTimeZone('UTC'));
-        }
-        $combinedAppointment= CombinedAppointmentRequest::forAppointment($ctCalEntry->getCalendar()->getId(), $ctCalEntry->getId(), $sDate->format('Y-m-d'))->get();
         // logDebug("Got combined appointment ".serialize($combinedAppointment));
         if ($combinedAppointment != null ) {
             // Now process the resource bookings (if any)
@@ -559,3 +625,127 @@ function logError($message) {
     error_log("ERR: ".$message. "\n", 3, $logger);
 }
 
+/**
+ * Upload a file to the media library using a URL.
+ * 
+ * @version 1.3
+ * @author  Radley Sustaire
+ * @see     https://gist.github.com/RadGH/966f8c756c5e142a5f489e86e751eacb
+ *
+ * @param string $url           URL to be uploaded
+ * @param null|string $title    Override the default post_title
+ * @param null|string $content  Override the default post_content (Added in 1.3)
+ * @param null|string $alt      Override the default alt text (Added in 1.3)
+ *
+ * @return int|false
+ */
+function uploadFromLocalFile( $tmpFile, $title = null, $content = null, $alt = null ) {
+	require_once( ABSPATH . "/wp-load.php");
+	require_once( ABSPATH . "/wp-admin/includes/image.php");
+	require_once( ABSPATH . "/wp-admin/includes/file.php");
+	require_once( ABSPATH . "/wp-admin/includes/media.php");
+	
+    
+    $invalidRightsHeader= "Keine ausreichende Berechtigung"; // File starts with this content when rights are missing
+    $fileContent = file_get_contents($tmpFile, false, null, 0, 64);
+    if (str_starts_with($fileContent, $invalidRightsHeader)) {
+        logError("Not enough rights to access file ".$tmpFile);
+        // wp_delete_file($tmpFile);
+        return false;
+    }
+    //
+    // Get the filename and extension ("photo.png" => "photo", "png")
+    $extension = pathinfo($tmpFile, PATHINFO_EXTENSION);
+    $fileName= pathinfo($tmpFile, PATHINFO_BASENAME);
+	
+	// An extension is required or else WordPress will reject the upload
+	if (strlen($extension) >0 ) {
+		// Look up mime type, example: "/photo.png" -> "image/png"
+		$mime = mime_content_type( $tmpFile );
+		$mime = is_string($mime) ? sanitize_mime_type( $mime ) : false;
+		
+		// Only allow certain mime types because mime types do not always end in a valid extension (see the .doc example below)
+        // We only allow PDF at the moment
+		$mime_extensions = array(
+			// mime_type         => extension (no period)
+//			'text/plain'         => 'txt',
+//			'text/csv'           => 'csv',
+//			'application/msword' => 'doc',
+//			'image/jpg'          => 'jpg',
+//			'image/jpeg'         => 'jpeg',
+//			'image/gif'          => 'gif',
+//			'image/png'          => 'png',
+//			'video/mp4'          => 'mp4',
+            'application/pdf'    => 'pdf'
+		);
+		
+		if ( isset( $mime_extensions[$mime] ) ) {
+			// Use the mapped extension
+			$extension = $mime_extensions[$mime];
+		}else{
+			// Could not identify extension. Clear temp file and abort.
+            logError("Wrong media type in " . $tmpFile);
+			// wp_delete_file($tmpFile);
+			return false;
+		}
+	} else {
+        logError("Missing file extension in " . $tmpFile . " extension: ".$extension);
+    }
+	
+	// Upload by "sideloading": "the same way as an uploaded file is handled by media_handle_upload"
+	$args = array(
+		'name' => "$fileName.$extension",
+		'tmp_name' => $tmpFile,
+	);
+	
+	// Post data to override the post title, content, and alt text
+	$post_data = array();
+	if ($title) {
+        $post_data['post_title'] = $title;
+    }
+    if ($content) {
+        $post_data['post_content'] = $content;
+    }
+
+    // Do the upload
+	$attachment_id = media_handle_sideload( $args, 0, null, $post_data );
+	
+	// Clear temp file
+	// wp_delete_file($tmpFile);
+	
+	// Error uploading
+	if (is_wp_error($attachment_id)) {
+        logError("Error in uploading " . $tmpFile);
+        return false;
+    }
+
+    // Save alt text as post meta if provided
+	if ( $alt ) {
+		update_post_meta( $attachment_id, '_wp_attachment_image_alt', $alt );
+	}
+	
+	// Success, return attachment ID
+	return (int) $attachment_id;
+}
+
+/**
+ * Add the flyer link to the post content and return the new post content
+ * 
+ * @param type $postContent
+ * @param type $wpFlyerId
+ * @return string
+ */
+function addFlyerLink($postContent, $wpFlyerId) {
+    $flyerLink= wp_get_attachment_url( $wpFlyerId );
+    //Tries to replace "#FLYER:Link-Title:#" with a html link. $count is updated to check whether the call succeeded
+    $infoAndFlyer = preg_replace('/#FLYER:(.*?):#/', '<a href="'.$flyerLink.'" target="_blank">$1</a>', $postContent, 1, $count);
+    if ($count == 0) {
+        //Did not succeed, simply append the link at the end of the text
+        $infoAndFlyer = $postContent . "<br>\n".'<a href="'.$flyerLink.'" target="_blank">Download Flyer</a>';
+        logDebug("Adding link at the bottom of the text ".$flyerLink);
+    } else {
+        logDebug("Replaced text $count time(s) with link ".$flyerLink);
+    }
+    logInfo("Wordpress media ID ".$wpFlyerId . " adding link to flyer");
+    return $infoAndFlyer;
+}

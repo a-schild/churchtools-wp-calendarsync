@@ -20,6 +20,7 @@ https://de.wordpress.org/plugins/events-manager/
 - Uses the modern REST api of churchtools
 - Creates logfile in the plugin folder, configurable log levels
 - Embedd event link on bottom of text or replace #LINK:<text>:# with the link
+- Attach flyer from event files, link can be customized via #FLYER:Mehr infos im Flyer:#
 
 ### Room for improvement (and/or missing features)
 - Build wordpress package via github actions
@@ -32,8 +33,6 @@ https://de.wordpress.org/plugins/events-manager/
 - Notify someone about sync problems
 - Better error handling in the sync process
 - Link config screen directly from plugins list
-- When an image is removed in churchtools, then remove it in wordpress too
-  (Replacing images already works)
 - Make plugin (and updates) available via wordpress plugins site
 - Handle recurrence of events as recurrence in wp too (perhaps)
 

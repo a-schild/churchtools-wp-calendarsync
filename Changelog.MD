@@ -2,7 +2,12 @@
 
 ## 2024-05-13
 - Merged in link replacement pull request from JonFStr (Thanks)
+  You can now also use this macro to embedd the link in the post content
+  #LINK:Mehr infos unter diesem Link:#
 - Make sure link starts with http:// or https://, otherwise we prefix it with https://
+- Add one file attachment, if we find a event file attachement which has "flyer"
+  in the file name
+  The link to the flyer can also be used with a placeholder #FLYER:Mehr infos auf dem Flyer:#
 
 ## 2024-02-15
 - Release v1.0.7
