@@ -152,7 +152,7 @@ function ctwpsync_initplugin()
 {
     global $wpdb;
     $table_name = $wpdb->prefix.'ctwpsync_mapping';
-    $sql = "CREATE TABLE IF NOT EXISTS ".$table_name."(
+    $sql = "CREATE TABLE ".$table_name." (
             id mediumint(9) NOT NULL AUTO_INCREMENT,
             ct_id mediumint(9) NOT NULL,
             ct_repeating mediumint(9),
