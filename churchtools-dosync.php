@@ -19,7 +19,7 @@ CTLog::enableFileLog(); // enable logfile
 global $wpctsyncDoInfoLog;
 $wpctsyncDoInfoLog= true;
 global $wpctsyncDoDebugLog;
-$wpctsyncDoDebugLog= true;
+$wpctsyncDoDebugLog= false;
 
 global $wpdb;
 $wpdb_prefix = $wpdb->prefix;
@@ -264,6 +264,7 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
                                 logInfo("Found flyer to attach ".$ctFile->getId()." with name ". $ctFile->getName(). " fileURL: ".$ctFile->getFileUrl());
                                 if ($ctFile->getId() == $ct_flyer_id && $wp_flyer_id != null) {
                                     // Already found and mapped
+									logDebug("Found flyer already attached ".$ctFile->getId()." ct_flyer_id ". $ct_flyer_id . " and wp_flyer_id ".$wp_flyer_id);
                                     $event->post_content= addFlyerLink($event->post_content, $wp_flyer_id);
                                 } else {
                                     // Download from CT and add to media library
@@ -277,6 +278,7 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
                                     // TODO: Check if we already have this file in WP, otherwise upload it
                                     // Then attach a link to the file to the event content
                                     // media_handle_sideload see below
+                                    $newCTFlyerId= $ctFile->getId();
                                     $newWPFlyerId= uploadFromLocalFile($tmpFlyerFile, $ctFile->getName());
                                     if ($newWPFlyerId) {
                                         $event->post_content= addFlyerLink($event->post_content, $newWPFlyerId);
@@ -338,7 +340,7 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
         }
         $saveResult= $event->save();
         if ($saveResult) {
-            logInfo("Saved ct event id: ".$ctCalEntry->getId(). " WP event ID ".$event->event_id." post id: ".$event->ID." result: ".$saveResult." serialized: ".serialize($saveResult) );
+            logDebug("Saved ct event id: ".$ctCalEntry->getId(). " WP event ID ".$event->event_id." post id: ".$event->ID." result: ".$saveResult." serialized: ".serialize($saveResult) );
             if ($imageURL != null) {
                 $attachmentID= setEventImage($imageURL, $imageName, $event->ID);
                 logDebug("Attached image ".$imageName." from ".$imageURL." as attachement ".$attachmentID);
@@ -377,7 +379,7 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
                     $sql.= " AND event_start='".date_format( date_create($ctCalEntry->getStartDate()), 'Y-m-d H:i:s' ). " ';";
                 }
                 $wpdb->query($wpdb->prepare($sql));
-                // logDebug(serialize($sql));
+                logDebug(serialize($sql));
             }
             // Handle event categories from resource type
             updateEventCategories($calendars_categories_mapping, $resourcetype_for_categories, $ctCalEntry, $event, $combinedAppointment);

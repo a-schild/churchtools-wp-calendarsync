@@ -1,6 +1,12 @@
 # churchtools-wp-calendarsync changelog
 
+## 2025-04-04
+- Release v1.0.9
+- Make sure to not reupload file if already present in WP
+- Set log level to info
+
 ## 2024-05-13
+- Release v1.0.8
 - Merged in link replacement pull request from JonFStr (Thanks)
   You can now also use this macro to embedd the link in the post content
   #LINK:Mehr infos unter diesem Link:#
