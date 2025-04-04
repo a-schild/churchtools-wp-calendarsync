@@ -261,7 +261,7 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
                     if ($eventFiles != null) {
                         foreach ($eventFiles as $ctFile) {
                             if ($ctFile->getName() != null && str_contains(strtolower($ctFile->getName()), "flyer")) {
-                                logInfo("Found flyer to attach ".$ctFile->getId()." with name ". $ctFile->getName(). " fileURL: ".$ctFile->getFileUrl());
+                                logDebug("Found flyer to attach ".$ctFile->getId()." with name ". $ctFile->getName(). " fileURL: ".$ctFile->getFileUrl());
                                 if ($ctFile->getId() == $ct_flyer_id && $wp_flyer_id != null) {
                                     // Already found and mapped
 									logDebug("Found flyer already attached ".$ctFile->getId()." ct_flyer_id ". $ct_flyer_id . " and wp_flyer_id ".$wp_flyer_id);
@@ -748,6 +748,6 @@ function addFlyerLink($postContent, $wpFlyerId) {
     } else {
         logDebug("Replaced text $count time(s) with link ".$flyerLink);
     }
-    logInfo("Wordpress media ID ".$wpFlyerId . " adding link to flyer");
+    logDebug("Wordpress media ID ".$wpFlyerId . " adding link to flyer");
     return $infoAndFlyer;
 }

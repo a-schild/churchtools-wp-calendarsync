@@ -1,6 +1,8 @@
 # churchtools-wp-calendarsync changelog
 
 ## 2025-04-04
+- Release v1.0.10
+- Set log level for flyer handling to debug when not modifying wp database
 - Release v1.0.9
 - Make sure to not reupload file if already present in WP
 - Set log level to info
