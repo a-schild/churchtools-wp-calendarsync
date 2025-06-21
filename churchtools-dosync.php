@@ -54,6 +54,7 @@ $startTimestamp= Date('Y-m-d H:i:s');
 logInfo("Start sync cycle ".$startTimestamp);
 try
 {
+	set_time_limit(300); // 5min to process all events
     $serverURL= $options['url'];
     $apiToken= $options['apitoken'];
     CTConfig::setApiURL($serverURL);
@@ -165,6 +166,8 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
             // We did already map it
             logDebug("Found mapping for ct id: ".$ctCalEntry->getId()." so already synched in the past");
             $event= em_get_event($result[0]->wp_id);
+			// Make sure we are an event
+			$event->event_type= "event";
             if ($event->ID != null ){
                 // OK, still existing, make sure it's not in trash
                 // logDebug(serialize($event));
@@ -177,6 +180,7 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
                         $wpdb->query($wpdb->prepare("DELETE FROM ".$wpctsync_tablename." WHERE ct_id=".$ctCalEntry->getId()));
                     }
                     $event= new EM_Event(false);
+					$event->event_type= "event";
                     $addMode= true;
                 } else {
                     logDebug("Event status in wordpress ". $event->event_status);
@@ -199,6 +203,7 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
         } else {
             logDebug("No mapping for event ".$ctCalEntry->getId()." found, so create a new one");
             $event= new EM_Event(false);
+			$event->event_type= "event";
             $addMode= true;
         }
         //logDebug("Query result: ".serialize($result));
@@ -279,7 +284,7 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
                                     // Then attach a link to the file to the event content
                                     // media_handle_sideload see below
                                     $newCTFlyerId= $ctFile->getId();
-                                    $newWPFlyerId= uploadFromLocalFile($tmpFlyerFile, $ctFile->getName());
+                                    $newWPFlyerId= uploadFromLocalFile($tmpFlyerFile, $ctFile->getName(), null, null, $sDate->format('Y/m'));
                                     if ($newWPFlyerId) {
                                         $event->post_content= addFlyerLink($event->post_content, $newWPFlyerId);
                                     } else {
@@ -342,7 +347,7 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
         if ($saveResult) {
             logDebug("Saved ct event id: ".$ctCalEntry->getId(). " WP event ID ".$event->event_id." post id: ".$event->ID." result: ".$saveResult." serialized: ".serialize($saveResult) );
             if ($imageURL != null) {
-                $attachmentID= setEventImage($imageURL, $imageName, $event->ID);
+                $attachmentID= setEventImage($imageURL, $imageName, $event->ID, $sDate);
                 logDebug("Attached image ".$imageName." from ".$imageURL." as attachement ".$attachmentID);
             }
             if ($addMode) {
@@ -560,6 +565,7 @@ function cleanupOldEntries($startDate, $processingStart) {
  * $fileURL Download the image file from there
  * $fileName Name of the file to download
  * $postID  Attach to this post
+ * $uploadPart should by a string with the year/month of the event to prevent duplicates
  * 
  * return attachmentID
  * 
@@ -567,10 +573,33 @@ function cleanupOldEntries($startDate, $processingStart) {
  * $filename is the name of the file
  * first we need to upload the file into the wp upload folder.
  */
-function setEventImage($fileURL, $fileName, $postID) {
-    $upload_file = wp_upload_bits( $fileName, null, file_get_contents($fileURL) );
-    logDebug("Result of fileupload :".serialize($upload_file));
+function setEventImage($fileURL, $fileName, $postID, $eventDate) {
+	$uploadPart= $eventDate->format('Y/m');
+	// Get upload dir
+	$upload_dir    = wp_upload_dir();
+	// logDebug("Upload dir: ".serialize($upload_dir));
+	$upload_folder = $upload_dir['basedir'];
+	// logDebug("Upload folder: ".$upload_folder);
+
+	// Set filename, incl path
+	$sanFileName= sanitize_file_name($fileName);
+	$fullFilename = "{$upload_folder}/{$uploadPart}/{$sanFileName}";
+	if (file_exists($fullFilename)) {
+		logDebug("File exists: ".$fullFilename);
+		$attachment_id = get_attachment_id_by_filename($uploadPart, $fileName);
+		if ($attachment_id) {
+			logDebug("File attachment exists: ".$fullFilename. " post ".$attachment_id." skipping new upload");
+			return $attachment_id;
+		} else {
+			logDebug("File attachment does not exists: ".$fullFilename);
+		}
+	} else {
+		logDebug("File not existing: ".$fullFilename);
+	}
+	
+    $upload_file = wp_upload_bits( $fileName, null, file_get_contents($fileURL) , $uploadPart);
     if ( ! $upload_file['error'] ) {
+	  logDebug("Result of fileupload :".serialize($upload_file));
       // if succesfull insert the new file into the media library (create a new attachment post type).
       $wp_filetype = wp_check_filetype($fileName, null );
 
@@ -593,7 +622,9 @@ function setEventImage($fileURL, $fileName, $postID) {
          wp_update_attachment_metadata( $attachment_id,  $attachment_data );
          set_post_thumbnail( $postID, $attachment_id );
        }
-    }
+    } else {
+		logError("Error in file upload ".serialize($upload_file));
+	}
     return $attachment_id;
 }
 
@@ -638,10 +669,11 @@ function logError($message) {
  * @param null|string $title    Override the default post_title
  * @param null|string $content  Override the default post_content (Added in 1.3)
  * @param null|string $alt      Override the default alt text (Added in 1.3)
+ * @postDate should be the event date to prevent duplicates
  *
  * @return int|false
  */
-function uploadFromLocalFile( $tmpFile, $title = null, $content = null, $alt = null ) {
+function uploadFromLocalFile( $tmpFile, $title = null, $content = null, $alt = null, $postDate= null ) {
 	require_once( ABSPATH . "/wp-load.php");
 	require_once( ABSPATH . "/wp-admin/includes/image.php");
 	require_once( ABSPATH . "/wp-admin/includes/file.php");
@@ -708,6 +740,9 @@ function uploadFromLocalFile( $tmpFile, $title = null, $content = null, $alt = n
     if ($content) {
         $post_data['post_content'] = $content;
     }
+    if ($postDate) {
+        $post_data['post_date'] = $postDate;
+    }
 
     // Do the upload
 	$attachment_id = media_handle_sideload( $args, 0, null, $post_data );
@@ -750,4 +785,29 @@ function addFlyerLink($postContent, $wpFlyerId) {
     }
     logDebug("Wordpress media ID ".$wpFlyerId . " adding link to flyer");
     return $infoAndFlyer;
+}
+
+/**
+ * Get the post for this uploaded file
+ *
+ * $subPath   for example 2025/06
+ * $param $filename for example "MyPicture.png"
+ * 
+ */
+function get_attachment_id_by_filename($subPath, $filename) {
+    $query = new WP_Query([
+        'post_type' => 'attachment',
+        'post_status' => 'inherit',
+        'meta_query' => [
+            [
+                'key' => '_wp_attached_file',
+                'value' => $subPath."/".sanitize_file_name($filename),
+                'compare' => '='
+            ]
+        ],
+        'posts_per_page' => 1,
+        'fields' => 'ids'
+    ]);
+    
+    return $query->posts ? $query->posts[0] : false;
 }

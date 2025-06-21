@@ -1,5 +1,12 @@
 # churchtools-wp-calendarsync changelog
 
+## 2025-06-21
+- Release v1.0.11
+- Added support for Event Manager 7.x
+- Check for existing images before uploading
+  Prevents duplicate uploads
+- Upload images in folder with year+month of event
+
 ## 2025-04-04
 - Release v1.0.10
 - Set log level for flyer handling to debug when not modifying wp database
