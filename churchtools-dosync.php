@@ -589,6 +589,7 @@ function setEventImage($fileURL, $fileName, $postID, $eventDate) {
 		$attachment_id = get_attachment_id_by_filename($uploadPart, $fileName);
 		if ($attachment_id) {
 			logDebug("File attachment exists: ".$fullFilename. " post ".$attachment_id." skipping new upload");
+			set_post_thumbnail( $postID, $attachment_id );
 			return $attachment_id;
 		} else {
 			logDebug("File attachment does not exists: ".$fullFilename);

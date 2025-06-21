@@ -1,6 +1,10 @@
 # churchtools-wp-calendarsync changelog
 
 ## 2025-06-21
+- Release v1.0.12
+- Small fix to attach images if found
+
+## 2025-06-21
 - Release v1.0.11
 - Added support for Event Manager 7.x
 - Check for existing images before uploading
