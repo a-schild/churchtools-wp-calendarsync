@@ -1,5 +1,9 @@
 # churchtools-wp-calendarsync changelog
 
+## 2025-06-25
+- Release v1.0.13
+- Small fix for all day events (Thanks to #Fearless-88)
+
 ## 2025-06-21
 - Release v1.0.12
 - Small fix to attach images if found

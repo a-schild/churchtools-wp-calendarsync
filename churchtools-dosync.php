@@ -302,11 +302,11 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
 
         // $event->status= 0; // Publish entry would be 1 (Does not work at the moment...???)
         if ($ctCalEntry->getAllDay() === "true") {
-            $sDate= $ctCalEntry->getStartDate();
-            $eDate= $ctCalEntry->getEndDate();
-            logDebug("StartDate: ".$sDate);
-            $event->event_start_date= $sDate;
-            $event->event_end_date= $eDate;
+            $sDate= \DateTime::createFromFormat('Y-m-d', $ctCalEntry->getStartDate(), new DateTimeZone('UTC'));
+            $eDate= \DateTime::createFromFormat('Y-m-d', $ctCalEntry->getEndDate(), new DateTimeZone('UTC'));
+            logDebug("StartDate: ".$sDate->format('Y-m-d H:i:s'));
+            $event->event_start_date= $sDate->format('Y-m-d');
+            $event->event_end_date= $eDate->format('Y-m-d');
             $event->event_all_day= 1;
         } else {
             $sDate= \DateTime::createFromFormat('Y-m-d\TH:i:s+', $ctCalEntry->getStartDate(), new DateTimeZone('UTC'));
@@ -573,7 +573,7 @@ function cleanupOldEntries($startDate, $processingStart) {
  * $filename is the name of the file
  * first we need to upload the file into the wp upload folder.
  */
-function setEventImage($fileURL, $fileName, $postID, $eventDate) {
+function setEventImage(string $fileURL, string $fileName, int $postID, \DateTime $eventDate) {
 	$uploadPart= $eventDate->format('Y/m');
 	// Get upload dir
 	$upload_dir    = wp_upload_dir();
