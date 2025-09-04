@@ -139,292 +139,305 @@ logInfo("End sync cycle ".Date('Y-m-d H:i:s'));
  */
 function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categories_mapping, int $resourcetype_for_categories) {
     $isRepeating= $ctCalEntry->getRepeatId() != "0";
-    if (!$ctCalEntry->getIsInternal()) {
-        logDebug("Caption: ".$ctCalEntry->getCaption()." StartDate: ".$ctCalEntry->getStartDate()." EndDate: ".$ctCalEntry->getEndDate().
-            " Is allday: ".$ctCalEntry->getAllDay().($isRepeating ? " Is repeating" : " Is not repeating"));
-        //logDebug("Object: ".serialize($ctCalEntry));
-        global $wpctsync_tablename;
-        global $wpdb;
-        if ($isRepeating) {
-            $sql= $wpdb->prepare('SELECT * FROM `'.$wpctsync_tablename.'` WHERE `ct_id` = %d and ct_repeating=1 '
-                . 'and event_start=\'%s\' ;', array($ctCalEntry->getId(), date_format( date_create($ctCalEntry->getStartDate()), 'Y-m-d H:i:s' )));
-        } else {
-            $sql= $wpdb->prepare('SELECT * FROM `'.$wpctsync_tablename.'` WHERE `ct_id` = %d ;', array($ctCalEntry->getId()));
-        }
-        logDebug(serialize($sql));
-        $result= $wpdb->get_results($sql);
-        $addMode= false;
-        $ct_image_id= null; // CT file id of image
-        $wp_image_id= null; // WP attachment id of post image
-        $ct_flyer_id= null; // CT file id of flyer
-        $wp_flyer_id= null; // WP flyer attachment id
-        $newCtImageID= null;
-        $newCTFlyerId= null;
-        $newWPFlyerId= null;
-        // logDebug(serialize($result));
-        if (sizeof($result) == 1) {
-            // We did already map it
-            logDebug("Found mapping for ct id: ".$ctCalEntry->getId()." so already synched in the past");
-            $event= em_get_event($result[0]->wp_id);
-			// Make sure we are an event
-			$event->event_type= "event";
-            if ($event->ID != null ){
-                // OK, still existing, make sure it's not in trash
-                // logDebug(serialize($event));
-                if ($event->status == -1) {
-                    // Is deleted
-                    logInfo("Event is in wp trash, removing from mapping ct id: ". $ctCalEntry->getId());
-                    if ($isRepeating) {
-                        $wpdb->query($wpdb->prepare("DELETE FROM ".$wpctsync_tablename." WHERE ct_id=".$ctCalEntry->getId()." and event_start='".date_format( date_create($ctCalEntry->getStartDate()), 'Y-m-d H:i:s' ))."';");
-                    } else {
-                        $wpdb->query($wpdb->prepare("DELETE FROM ".$wpctsync_tablename." WHERE ct_id=".$ctCalEntry->getId()));
-                    }
-                    $event= new EM_Event(false);
-					$event->event_type= "event";
-                    $addMode= true;
-                } else {
-                    logDebug("Event status in wordpress ". $event->event_status);
-                    $addMode= false;
-                    $ct_image_id= $result[0]->ct_image_id;
-                    $wp_image_id= $result[0]->wp_image_id;
-                    $ct_flyer_id= $result[0]->ct_flyer_id;
-                    $wp_flyer_id= $result[0]->wp_flyer_id;
-                }
-            } else {
-                // No longer found, deleted?
-                logInfo("Event no longer found in wp, removing from mapping, ct id: ".$ctCalEntry->getId());
-                if ($isRepeating) {
-                    $wpdb->query($wpdb->prepare("DELETE FROM ".$wpctsync_tablename." WHERE ct_id=".$ctCalEntry->getId()." and event_start='".date_format( date_create($ctCalEntry->getStartDate()), 'Y-m-d H:i:s' ))."';");
-                } else {
-                    $wpdb->query($wpdb->prepare("DELETE FROM ".$wpctsync_tablename." WHERE ct_id=".$ctCalEntry->getId()));
-                }
-                $addMode= true;
-            }
-        } else {
-            logDebug("No mapping for event ".$ctCalEntry->getId()." found, so create a new one");
-            $event= new EM_Event(false);
-			$event->event_type= "event";
-            $addMode= true;
-        }
-        //logDebug("Query result: ".serialize($result));
-        //logDebug("Query result size: ".sizeof($result));
-        // logDebug(serialize($ctCalEntry));
-        if ($ctCalEntry->getAddress() != null) {
-            $locationID= getCreateLocation($ctCalEntry->getAddress());
-            if (isset($locationID)) {
-                $event->location_id= $locationID;
-            }
-        }
-        $event->event_timezone= wp_timezone_string(); // Fix it to the default WP default timezone
-        $event->event_name= $ctCalEntry->getCaption();
+	global $wpdb;
+	// begin transaction, so we don't have duplicate entries
+	// if an execution timeout occurs
+	$wpdb->query('START TRANSACTION');
+	try
+	{
+		if (!$ctCalEntry->getIsInternal()) {
+			logDebug("Caption: ".$ctCalEntry->getCaption()." StartDate: ".$ctCalEntry->getStartDate()." EndDate: ".$ctCalEntry->getEndDate().
+				" Is allday: ".$ctCalEntry->getAllDay().($isRepeating ? " Is repeating" : " Is not repeating"));
+			//logDebug("Object: ".serialize($ctCalEntry));
+			global $wpctsync_tablename;
+			if ($isRepeating) {
+				$sql= $wpdb->prepare('SELECT * FROM `'.$wpctsync_tablename.'` WHERE `ct_id` = %d and ct_repeating=1 '
+					. 'and event_start=\'%s\' ;', array($ctCalEntry->getId(), date_format( date_create($ctCalEntry->getStartDate()), 'Y-m-d H:i:s' )));
+			} else {
+				$sql= $wpdb->prepare('SELECT * FROM `'.$wpctsync_tablename.'` WHERE `ct_id` = %d ;', array($ctCalEntry->getId()));
+			}
+			logDebug(serialize($sql));
+			$result= $wpdb->get_results($sql);
+			$addMode= false;
+			$ct_image_id= null; // CT file id of image
+			$wp_image_id= null; // WP attachment id of post image
+			$ct_flyer_id= null; // CT file id of flyer
+			$wp_flyer_id= null; // WP flyer attachment id
+			$newCtImageID= null;
+			$newCTFlyerId= null;
+			$newWPFlyerId= null;
+			// logDebug(serialize($result));
+			if (sizeof($result) == 1) {
+				// We did already map it
+				logDebug("Found mapping for ct id: ".$ctCalEntry->getId()." so already synched in the past");
+				$event= em_get_event($result[0]->wp_id);
+				// Make sure we are an event
+				$event->event_type= "event";
+				if ($event->ID != null ){
+					// OK, still existing, make sure it's not in trash
+					// logDebug(serialize($event));
+					if ($event->status == -1) {
+						// Is deleted
+						logInfo("Event is in wp trash, removing from mapping ct id: ". $ctCalEntry->getId());
+						if ($isRepeating) {
+							$wpdb->query($wpdb->prepare("DELETE FROM ".$wpctsync_tablename." WHERE ct_id=".$ctCalEntry->getId()." and event_start='".date_format( date_create($ctCalEntry->getStartDate()), 'Y-m-d H:i:s' ))."';");
+						} else {
+							$wpdb->query($wpdb->prepare("DELETE FROM ".$wpctsync_tablename." WHERE ct_id=".$ctCalEntry->getId()));
+						}
+						$event= new EM_Event(false);
+						$event->event_type= "event";
+						$addMode= true;
+					} else {
+						logDebug("Event status in wordpress ". $event->event_status);
+						$addMode= false;
+						$ct_image_id= $result[0]->ct_image_id;
+						$wp_image_id= $result[0]->wp_image_id;
+						$ct_flyer_id= $result[0]->ct_flyer_id;
+						$wp_flyer_id= $result[0]->wp_flyer_id;
+					}
+				} else {
+					// No longer found, deleted?
+					logInfo("Event no longer found in wp, removing from mapping, ct id: ".$ctCalEntry->getId());
+					if ($isRepeating) {
+						$wpdb->query($wpdb->prepare("DELETE FROM ".$wpctsync_tablename." WHERE ct_id=".$ctCalEntry->getId()." and event_start='".date_format( date_create($ctCalEntry->getStartDate()), 'Y-m-d H:i:s' ))."';");
+					} else {
+						$wpdb->query($wpdb->prepare("DELETE FROM ".$wpctsync_tablename." WHERE ct_id=".$ctCalEntry->getId()));
+					}
+					$addMode= true;
+				}
+			} else {
+				logDebug("No mapping for event ".$ctCalEntry->getId()." found, so create a new one");
+				$event= new EM_Event(false);
+				$event->event_type= "event";
+				$addMode= true;
+			}
+			//logDebug("Query result: ".serialize($result));
+			//logDebug("Query result size: ".sizeof($result));
+			// logDebug(serialize($ctCalEntry));
+			if ($ctCalEntry->getAddress() != null) {
+				$locationID= getCreateLocation($ctCalEntry->getAddress());
+				if (isset($locationID)) {
+					$event->location_id= $locationID;
+				}
+			}
+			$event->event_timezone= wp_timezone_string(); // Fix it to the default WP default timezone
+			$event->event_name= $ctCalEntry->getCaption();
 
-        //Cache link and information
-        $ctLink = $ctCalEntry->getLink();
-        if (strlen(trim($ctLink)) > 0) {
-            if (!(str_starts_with($ctLink, "http://") || (str_starts_with($ctLink, "https://")))) {
-                $ctLink = "https://" . $ctLink;
-            }
-        }
-        $ctInfo = $ctCalEntry->getInformation() ?: '';
-        //When the link is set, attempt to embed it into the information text
-        if (!empty($ctLink)) {
-            logDebug("Found link to insert ".$ctLink);
-            $count = 0;
-            //Tries to replace "#LINK:Link-Title:#" with a html link. $count is updated to check whether the call succeeded
-            $infoAndLink = preg_replace('/#LINK:(.*?):#/', '<a href="'.$ctLink.'" target="_blank">$1</a>', $ctInfo, 1, $count);
-            if ($count == 0) {
-                //Did not succeed, simply append the link at the end of the text
-                $infoAndLink = $ctInfo . "<br>\n".'<a href="'.$ctLink.'" target="_blank">Link</a>';
-                logDebug("Adding link at the bottom of the text ".$ctLink);
-            } else {
-                logDebug("Replaced text $count time(s) with link ".$ctLink);
-            }
-            //Set text with link in WP event
-            $event->post_content = $infoAndLink;
-        } else {
-            //Link is empty, just use the text
-            $event->post_content = $ctInfo;
-        }
+			//Cache link and information
+			$ctLink = $ctCalEntry->getLink();
+			if (strlen(trim($ctLink)) > 0) {
+				if (!(str_starts_with($ctLink, "http://") || (str_starts_with($ctLink, "https://")))) {
+					$ctLink = "https://" . $ctLink;
+				}
+			}
+			$ctInfo = $ctCalEntry->getInformation() ?: '';
+			//When the link is set, attempt to embed it into the information text
+			if (!empty($ctLink)) {
+				logDebug("Found link to insert ".$ctLink);
+				$count = 0;
+				//Tries to replace "#LINK:Link-Title:#" with a html link. $count is updated to check whether the call succeeded
+				$infoAndLink = preg_replace('/#LINK:(.*?):#/', '<a href="'.$ctLink.'" target="_blank">$1</a>', $ctInfo, 1, $count);
+				if ($count == 0) {
+					//Did not succeed, simply append the link at the end of the text
+					$infoAndLink = $ctInfo . "<br>\n".'<a href="'.$ctLink.'" target="_blank">Link</a>';
+					logDebug("Adding link at the bottom of the text ".$ctLink);
+				} else {
+					logDebug("Replaced text $count time(s) with link ".$ctLink);
+				}
+				//Set text with link in WP event
+				$event->post_content = $infoAndLink;
+			} else {
+				//Link is empty, just use the text
+				$event->post_content = $ctInfo;
+			}
 
-        if ($ctCalEntry->getAllDay() === "true") {
-            $sDate= \DateTime::createFromFormat('Y-m-d', $ctCalEntry->getStartDate(), new DateTimeZone('UTC'));
-        } else {
-            $sDate= \DateTime::createFromFormat('Y-m-d\TH:i:s+', $ctCalEntry->getStartDate(), new DateTimeZone('UTC'));
-        }
-        // Look into event and resources
-        $combinedAppointment= CombinedAppointmentRequest::forAppointment($ctCalEntry->getCalendar()->getId(), $ctCalEntry->getId(), $sDate->format('Y-m-d'))->get();
-        if ($combinedAppointment != null) {
-            logDebug("Found combined appointment");
-            $ctEvent= $combinedAppointment->getEvent();
-            if ($ctEvent != null) {
-                logDebug("Found associated event to appointment");
-                // Has associated event
-                $eventId= $ctEvent->getId();
-                if ($eventId != null ){
-                    logDebug("Found ct event with ID ".$eventId);
-                    $eventFiles= FileRequest::forEvent($eventId)->get();
-                    if ($eventFiles != null) {
-                        foreach ($eventFiles as $ctFile) {
-                            if ($ctFile->getName() != null && str_contains(strtolower($ctFile->getName()), "flyer")) {
-                                logDebug("Found flyer to attach ".$ctFile->getId()." with name ". $ctFile->getName(). " fileURL: ".$ctFile->getFileUrl());
-                                if ($ctFile->getId() == $ct_flyer_id && $wp_flyer_id != null) {
-                                    // Already found and mapped
-									logDebug("Found flyer already attached ".$ctFile->getId()." ct_flyer_id ". $ct_flyer_id . " and wp_flyer_id ".$wp_flyer_id);
-                                    $event->post_content= addFlyerLink($event->post_content, $wp_flyer_id);
-                                } else {
-                                    // Download from CT and add to media library
-                                    $tmpFlyer= sys_get_temp_dir().DIRECTORY_SEPARATOR.$ctFile->getId();
-                                    if (!is_dir($tmpFlyer)) {
-                                        mkdir($tmpFlyer);
-                                    }
-                                    $fileResult= $ctFile->downloadToPath($tmpFlyer);
-                                    $tmpFlyerFile= $tmpFlyer. DIRECTORY_SEPARATOR . $ctFile->getName();
-                                    logInfo("Downloaded to ".$fileResult." ".$tmpFlyerFile);
-                                    // TODO: Check if we already have this file in WP, otherwise upload it
-                                    // Then attach a link to the file to the event content
-                                    // media_handle_sideload see below
-                                    $newCTFlyerId= $ctFile->getId();
-                                    $newWPFlyerId= uploadFromLocalFile($tmpFlyerFile, $ctFile->getName(), null, null, $sDate->format('Y/m'));
-                                    if ($newWPFlyerId) {
-                                        $event->post_content= addFlyerLink($event->post_content, $newWPFlyerId);
-                                    } else {
-                                        logError("Error in media wp upload");
-                                    }
-                                }
-                                // Only the first attachment with Flyer in the name
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
+			if ($ctCalEntry->getAllDay() === "true") {
+				$sDate= \DateTime::createFromFormat('Y-m-d', $ctCalEntry->getStartDate(), new DateTimeZone('UTC'));
+			} else {
+				$sDate= \DateTime::createFromFormat('Y-m-d\TH:i:s+', $ctCalEntry->getStartDate(), new DateTimeZone('UTC'));
+			}
+			// Look into event and resources
+			$combinedAppointment= CombinedAppointmentRequest::forAppointment($ctCalEntry->getCalendar()->getId(), $ctCalEntry->getId(), $sDate->format('Y-m-d'))->get();
+			if ($combinedAppointment != null) {
+				logDebug("Found combined appointment");
+				$ctEvent= $combinedAppointment->getEvent();
+				if ($ctEvent != null) {
+					logDebug("Found associated event to appointment");
+					// Has associated event
+					$eventId= $ctEvent->getId();
+					if ($eventId != null ){
+						logDebug("Found ct event with ID ".$eventId);
+						$eventFiles= FileRequest::forEvent($eventId)->get();
+						if ($eventFiles != null) {
+							foreach ($eventFiles as $ctFile) {
+								if ($ctFile->getName() != null && str_contains(strtolower($ctFile->getName()), "flyer")) {
+									logDebug("Found flyer to attach ".$ctFile->getId()." with name ". $ctFile->getName(). " fileURL: ".$ctFile->getFileUrl());
+									if ($ctFile->getId() == $ct_flyer_id && $wp_flyer_id != null) {
+										// Already found and mapped
+										logDebug("Found flyer already attached ".$ctFile->getId()." ct_flyer_id ". $ct_flyer_id . " and wp_flyer_id ".$wp_flyer_id);
+										$event->post_content= addFlyerLink($event->post_content, $wp_flyer_id);
+									} else {
+										// Download from CT and add to media library
+										$tmpFlyer= sys_get_temp_dir().DIRECTORY_SEPARATOR.$ctFile->getId();
+										if (!is_dir($tmpFlyer)) {
+											mkdir($tmpFlyer);
+										}
+										$fileResult= $ctFile->downloadToPath($tmpFlyer);
+										$tmpFlyerFile= $tmpFlyer. DIRECTORY_SEPARATOR . $ctFile->getName();
+										logInfo("Downloaded to ".$fileResult." ".$tmpFlyerFile);
+										// TODO: Check if we already have this file in WP, otherwise upload it
+										// Then attach a link to the file to the event content
+										// media_handle_sideload see below
+										$newCTFlyerId= $ctFile->getId();
+										$newWPFlyerId= uploadFromLocalFile($tmpFlyerFile, $ctFile->getName(), null, null, $sDate->format('Y/m'));
+										if ($newWPFlyerId) {
+											$event->post_content= addFlyerLink($event->post_content, $newWPFlyerId);
+										} else {
+											logError("Error in media wp upload");
+										}
+									}
+									// Only the first attachment with Flyer in the name
+									break;
+								}
+							}
+						}
+					}
+				}
+			}
 
-        // $event->status= 0; // Publish entry would be 1 (Does not work at the moment...???)
-        if ($ctCalEntry->getAllDay() === "true") {
-            $sDate= \DateTime::createFromFormat('Y-m-d', $ctCalEntry->getStartDate(), new DateTimeZone('UTC'));
-            $eDate= \DateTime::createFromFormat('Y-m-d', $ctCalEntry->getEndDate(), new DateTimeZone('UTC'));
-            logDebug("StartDate: ".$sDate->format('Y-m-d H:i:s'));
-            $event->event_start_date= $sDate->format('Y-m-d');
-            $event->event_end_date= $eDate->format('Y-m-d');
-            $event->event_all_day= 1;
-        } else {
-            // Parse dates with timezone awareness using the complete ISO 8601 format
-            // ChurchTools sends dates with timezone offset (e.g., 2025-10-25T08:00:00+02:00)
-            // We need to parse them properly to respect the timezone information
-            $sDate = new \DateTime($ctCalEntry->getStartDate());
-            $eDate = new \DateTime($ctCalEntry->getEndDate());
-            
-            // Convert to WordPress timezone
-            $wpTimezone = new DateTimeZone(wp_timezone_string());
-            $sDate->setTimezone($wpTimezone);
-            $eDate->setTimezone($wpTimezone);
-            
-            logDebug("StartDate: ".$sDate->format('Y-m-d H:i:s T'));
-            logDebug("EndDate: ".$eDate->format('Y-m-d H:i:s T'));
-            $event->event_start_date= $sDate->format('Y-m-d');
-            $event->event_end_date= $eDate->format('Y-m-d');
-            logDebug("StartTime: ".$sDate->format('H:i:s'));
-            $event->event_start_time= $sDate->format('H:i:s');
-            $event->event_end_time= $eDate->format('H:i:s');
-            $event->event_all_day= 0;
-        }
-        $imageURL= null;
-        $imageName= null;
-        if ($ctCalEntry->getImage() != null) {
-            // Handle image from ct calendar entry
-            $newCtImageID= $ctCalEntry->getImage()->getId();
-            if ($addMode || $ct_image_id == null || $ct_image_id != $newCtImageID) {
-                $imageURL= $ctCalEntry->getImage()->getFileUrl();
-                $imageName= $ctCalEntry->getImage()->getName();
+			// $event->status= 0; // Publish entry would be 1 (Does not work at the moment...???)
+			if ($ctCalEntry->getAllDay() === "true") {
+				$sDate= \DateTime::createFromFormat('Y-m-d', $ctCalEntry->getStartDate(), new DateTimeZone('UTC'));
+				$eDate= \DateTime::createFromFormat('Y-m-d', $ctCalEntry->getEndDate(), new DateTimeZone('UTC'));
+				logDebug("StartDate: ".$sDate->format('Y-m-d H:i:s'));
+				$event->event_start_date= $sDate->format('Y-m-d');
+				$event->event_end_date= $eDate->format('Y-m-d');
+				$event->event_all_day= 1;
+			} else {
+				// Parse dates with timezone awareness using the complete ISO 8601 format
+				// ChurchTools sends dates with timezone offset (e.g., 2025-10-25T08:00:00+02:00)
+				// We need to parse them properly to respect the timezone information
+				$sDate = new \DateTime($ctCalEntry->getStartDate());
+				$eDate = new \DateTime($ctCalEntry->getEndDate());
+				
+				// Convert to WordPress timezone
+				$wpTimezone = new DateTimeZone(wp_timezone_string());
+				$sDate->setTimezone($wpTimezone);
+				$eDate->setTimezone($wpTimezone);
+				
+				logDebug("StartDate: ".$sDate->format('Y-m-d H:i:s T'));
+				logDebug("EndDate: ".$eDate->format('Y-m-d H:i:s T'));
+				$event->event_start_date= $sDate->format('Y-m-d');
+				$event->event_end_date= $eDate->format('Y-m-d');
+				logDebug("StartTime: ".$sDate->format('H:i:s'));
+				$event->event_start_time= $sDate->format('H:i:s');
+				$event->event_end_time= $eDate->format('H:i:s');
+				$event->event_all_day= 0;
+			}
+			$imageURL= null;
+			$imageName= null;
+			if ($ctCalEntry->getImage() != null) {
+				// Handle image from ct calendar entry
+				$newCtImageID= $ctCalEntry->getImage()->getId();
+				if ($addMode || $ct_image_id == null || $ct_image_id != $newCtImageID) {
+					$imageURL= $ctCalEntry->getImage()->getFileUrl();
+					$imageName= $ctCalEntry->getImage()->getName();
 
-                logDebug("Found image in CT: ". $ctCalEntry->getImage()->getFileUrl()." filename: ".$ctCalEntry->getImage()->getName());
-//                if (has_post_thumbnail($event->id)) {
-//                    logDebug("Has thumbnail");
-//                    $image= get_post_thumbnail_id( $event->id, 'full' );
-//                    //$image = wp_get_attachment_image_src( get_post_thumbnail_id( $event->id, 'single-post-thumbnail'));
-//                    logDebug(serialize($image));
-//                } else {
-//                    logDebug("No thumbnail");
-//                }
-            }
-        }
-        $saveResult= $event->save();
-        if ($saveResult) {
-            logDebug("Saved ct event id: ".$ctCalEntry->getId(). " WP event ID ".$event->event_id." post id: ".$event->ID." result: ".$saveResult." serialized: ".serialize($saveResult) );
-            if ($imageURL != null) {
-                $attachmentID= setEventImage($imageURL, $imageName, $event->ID, $sDate);
-                logDebug("Attached image ".$imageName." from ".$imageURL." as attachement ".$attachmentID);
-            }
-            if ($addMode) {
-                // Keeps track of ct event id and wp event id for subsequent updates+deletions
-                if (!$wpdb->insert($wpctsync_tablename, array(
-                    'ct_id' => $ctCalEntry->getId(),
-                    'wp_id' => $event->event_id,
-                    'ct_image_id' => $newCtImageID,
-                    'ct_flyer_id' => $newCTFlyerId,
-                    'wp_flyer_id' => $newWPFlyerId,
-                    'last_seen' => date('Y-m-d H:i:s'),
-                    'event_start' => $ctCalEntry->getStartDate(),
-                    'event_end' => $ctCalEntry->getEndDate(),
-                    'ct_repeating' => $isRepeating ? 1 : 0
-                    ))) 
-                    {
-                        logError("Error inserting mapping, duplicates will occure ".$wpdb->last_error);
-                }
-            } else {
-                // Update last seen time stamp to flag as "still existing"
-                $sql= "UPDATE ".$wpctsync_tablename.
-                    " SET last_seen='".date('Y-m-d H:i:s')."' ";
-                if ($newCtImageID != null) {
-                    $sql.= ", ct_image_id=".$newCtImageID." ";
-                }
-                if ($newCTFlyerId!= null) {
-                    $sql.= ", ct_flyer_id=".$newCTFlyerId." ";
-                }
-                if ($newWPFlyerId != null) {
-                    $sql.= ", wp_flyer_id=".$newWPFlyerId." ";
-                }
-                $sql.= "WHERE ct_id=".$ctCalEntry->getId();
-                if ($isRepeating ) {
-                    $sql.= " AND event_start='".date_format( date_create($ctCalEntry->getStartDate()), 'Y-m-d H:i:s' ). " ';";
-                }
-                $wpdb->query($wpdb->prepare($sql));
-                logDebug(serialize($sql));
-            }
-            // Handle event categories from resource type
-            updateEventCategories($calendars_categories_mapping, $resourcetype_for_categories, $ctCalEntry, $event, $combinedAppointment);
-        } else {
-            logError("Saving new event failed for ct id: ".$ctCalEntry->getId() );
-        }
-    } else {
-        // Perhaps we need to remove it, since visibility has changed
-        global $wpctsync_tablename;
-        global $wpdb;
-        if ($isRepeating) {
-            $result= $wpdb->get_results(sprintf('SELECT * FROM `%2$s` WHERE `ct_id` = %d and event_start=\''.date_format( date_create($ctCalEntry->getStartDate()), 'Y-m-d H:i:s' )."'", $ctCalEntry->getId(), $wpctsync_tablename));
-        } else {
-            $result= $wpdb->get_results(sprintf('SELECT * FROM `%2$s` WHERE `ct_id` = %d ', $ctCalEntry->getId(), $wpctsync_tablename));
-        }
-        $addMode= false;
-        if (sizeof($result) == 1) {
-            // We did already map it
-            logInfo("Found mapping for ct id: ".$ctCalEntry->getId());
-            $event= em_get_event($result[0]->wp_id);
-            if ($event->ID != null ){
-                // Is in events table, so delete it
-                $event->delete();
-            }
-            if ($isRepeating) {
-                logDebug("Deleting mapping entry for ct_id: ".$ctCalEntry->getId()." start date: ".date_format( date_create($ctCalEntry->getStartDate()), 'Y-m-d H:i:s' ));
-                $wpdb->query($wpdb->prepare("DELETE FROM ".$wpctsync_tablename." WHERE ct_id=".$ctCalEntry->getId(). "and event_start='".date_format( date_create($ctCalEntry->getStartDate()), 'Y-m-d H:i:s' )."';"));
-            } else {
-                logDebug("Deleting mapping entry for ct_id: ".$ctCalEntry->getId());            
-                $wpdb->query($wpdb->prepare("DELETE FROM ".$wpctsync_tablename." WHERE ct_id=".$ctCalEntry->getId()));
-            }
-        }        
-    }
-    
+					logDebug("Found image in CT: ". $ctCalEntry->getImage()->getFileUrl()." filename: ".$ctCalEntry->getImage()->getName());
+	//                if (has_post_thumbnail($event->id)) {
+	//                    logDebug("Has thumbnail");
+	//                    $image= get_post_thumbnail_id( $event->id, 'full' );
+	//                    //$image = wp_get_attachment_image_src( get_post_thumbnail_id( $event->id, 'single-post-thumbnail'));
+	//                    logDebug(serialize($image));
+	//                } else {
+	//                    logDebug("No thumbnail");
+	//                }
+				}
+			}
+			$saveResult= $event->save();
+			if ($saveResult) {
+				logDebug("Saved ct event id: ".$ctCalEntry->getId(). " WP event ID ".$event->event_id." post id: ".$event->ID." result: ".$saveResult." serialized: ".serialize($saveResult) );
+				if ($imageURL != null) {
+					$attachmentID= setEventImage($imageURL, $imageName, $event->ID, $sDate);
+					logDebug("Attached image ".$imageName." from ".$imageURL." as attachement ".$attachmentID);
+				}
+				if ($addMode) {
+					// Keeps track of ct event id and wp event id for subsequent updates+deletions
+					if (!$wpdb->insert($wpctsync_tablename, array(
+						'ct_id' => $ctCalEntry->getId(),
+						'wp_id' => $event->event_id,
+						'ct_image_id' => $newCtImageID,
+						'ct_flyer_id' => $newCTFlyerId,
+						'wp_flyer_id' => $newWPFlyerId,
+						'last_seen' => date('Y-m-d H:i:s'),
+						'event_start' => $ctCalEntry->getStartDate(),
+						'event_end' => $ctCalEntry->getEndDate(),
+						'ct_repeating' => $isRepeating ? 1 : 0
+						))) 
+						{
+							logError("Error inserting mapping, duplicates will occure ".$wpdb->last_error);
+					}
+				} else {
+					// Update last seen time stamp to flag as "still existing"
+					$sql= "UPDATE ".$wpctsync_tablename.
+						" SET last_seen='".date('Y-m-d H:i:s')."' ";
+					if ($newCtImageID != null) {
+						$sql.= ", ct_image_id=".$newCtImageID." ";
+					}
+					if ($newCTFlyerId!= null) {
+						$sql.= ", ct_flyer_id=".$newCTFlyerId." ";
+					}
+					if ($newWPFlyerId != null) {
+						$sql.= ", wp_flyer_id=".$newWPFlyerId." ";
+					}
+					$sql.= "WHERE ct_id=".$ctCalEntry->getId();
+					if ($isRepeating ) {
+						$sql.= " AND event_start='".date_format( date_create($ctCalEntry->getStartDate()), 'Y-m-d H:i:s' ). " ';";
+					}
+					$wpdb->query($wpdb->prepare($sql));
+					logDebug(serialize($sql));
+				}
+				// Handle event categories from resource type
+				updateEventCategories($calendars_categories_mapping, $resourcetype_for_categories, $ctCalEntry, $event, $combinedAppointment);
+			} else {
+				logError("Saving new event failed for ct id: ".$ctCalEntry->getId() );
+			}
+		} else {
+			// Perhaps we need to remove it, since visibility has changed
+			global $wpctsync_tablename;
+			global $wpdb;
+			if ($isRepeating) {
+				$result= $wpdb->get_results(sprintf('SELECT * FROM `%2$s` WHERE `ct_id` = %d and event_start=\''.date_format( date_create($ctCalEntry->getStartDate()), 'Y-m-d H:i:s' )."'", $ctCalEntry->getId(), $wpctsync_tablename));
+			} else {
+				$result= $wpdb->get_results(sprintf('SELECT * FROM `%2$s` WHERE `ct_id` = %d ', $ctCalEntry->getId(), $wpctsync_tablename));
+			}
+			$addMode= false;
+			if (sizeof($result) == 1) {
+				// We did already map it
+				logInfo("Found mapping for ct id: ".$ctCalEntry->getId());
+				$event= em_get_event($result[0]->wp_id);
+				if ($event->ID != null ){
+					// Is in events table, so delete it
+					$event->delete();
+				}
+				if ($isRepeating) {
+					logDebug("Deleting mapping entry for ct_id: ".$ctCalEntry->getId()." start date: ".date_format( date_create($ctCalEntry->getStartDate()), 'Y-m-d H:i:s' ));
+					$wpdb->query($wpdb->prepare("DELETE FROM ".$wpctsync_tablename." WHERE ct_id=".$ctCalEntry->getId(). "and event_start='".date_format( date_create($ctCalEntry->getStartDate()), 'Y-m-d H:i:s' )."';"));
+				} else {
+					logDebug("Deleting mapping entry for ct_id: ".$ctCalEntry->getId());            
+					$wpdb->query($wpdb->prepare("DELETE FROM ".$wpctsync_tablename." WHERE ct_id=".$ctCalEntry->getId()));
+				}
+			}        
+		}
+		// commit everything
+		$wpdb->query('COMMIT');
+	} 
+	catch (Exception $e)
+	{
+		// Make sure to revert if an exception happens
+		$wpdb->query('ROLLBACK');
+		throw $e;
+	}
 }
 
 /**

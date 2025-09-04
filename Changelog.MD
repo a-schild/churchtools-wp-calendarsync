@@ -1,6 +1,9 @@
 # churchtools-wp-calendarsync changelog
 
 ## 2025-09-04
+- Wrap code in transaction to prevent duplicate events
+
+## 2025-09-04
 - Release v1.0.14
 - Handle events correctly, when end time is in another DST state
   (Thanks to #Fearless-88)
