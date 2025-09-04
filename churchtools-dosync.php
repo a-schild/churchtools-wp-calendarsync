@@ -309,13 +309,19 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
             $event->event_end_date= $eDate->format('Y-m-d');
             $event->event_all_day= 1;
         } else {
-            $sDate= \DateTime::createFromFormat('Y-m-d\TH:i:s+', $ctCalEntry->getStartDate(), new DateTimeZone('UTC'));
-            // Set to WP location time zone
-            $sDate->setTimezone(new DateTimeZone(wp_timezone_string()));
-            $eDate= \DateTime::createFromFormat('Y-m-d\TH:i:s+', $ctCalEntry->getEndDate(), new DateTimeZone('UTC'));
-            // Set to WP location time zone
-            $eDate->setTimezone(new DateTimeZone(wp_timezone_string()));
-            logDebug("StartDate: ".$sDate->format('Y-m-d'));
+            // Parse dates with timezone awareness using the complete ISO 8601 format
+            // ChurchTools sends dates with timezone offset (e.g., 2025-10-25T08:00:00+02:00)
+            // We need to parse them properly to respect the timezone information
+            $sDate = new \DateTime($ctCalEntry->getStartDate());
+            $eDate = new \DateTime($ctCalEntry->getEndDate());
+            
+            // Convert to WordPress timezone
+            $wpTimezone = new DateTimeZone(wp_timezone_string());
+            $sDate->setTimezone($wpTimezone);
+            $eDate->setTimezone($wpTimezone);
+            
+            logDebug("StartDate: ".$sDate->format('Y-m-d H:i:s T'));
+            logDebug("EndDate: ".$eDate->format('Y-m-d H:i:s T'));
             $event->event_start_date= $sDate->format('Y-m-d');
             $event->event_end_date= $eDate->format('Y-m-d');
             logDebug("StartTime: ".$sDate->format('H:i:s'));
