@@ -1,6 +1,8 @@
 # churchtools-wp-calendarsync changelog
 
-## 2025-09-04
+## 2025-09-05
+- Release v1.0.16
+  Packaging problem in github actions
 - Release v1.0.15
 - Wrap code in transaction to prevent duplicate events
 - Handle events correctly, when end time is in another DST state
