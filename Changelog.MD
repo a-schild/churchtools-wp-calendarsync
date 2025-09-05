@@ -1,7 +1,11 @@
 # churchtools-wp-calendarsync changelog
 
 ## 2025-09-04
+- Release v1.0.15
 - Wrap code in transaction to prevent duplicate events
+- Handle events correctly, when end time is in another DST state
+  This time it works, problem is
+  https://github.com/5pm-HDH/churchtools-api/issues/227
 
 ## 2025-09-04
 - Release v1.0.14

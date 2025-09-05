@@ -148,6 +148,8 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
 		if (!$ctCalEntry->getIsInternal()) {
 			logDebug("Caption: ".$ctCalEntry->getCaption()." StartDate: ".$ctCalEntry->getStartDate()." EndDate: ".$ctCalEntry->getEndDate().
 				" Is allday: ".$ctCalEntry->getAllDay().($isRepeating ? " Is repeating" : " Is not repeating"));
+			logDebug("Start date time" .serialize($ctCalEntry->getStartDateAsDateTime()));
+			logDebug("End date time" .serialize($ctCalEntry->getEndDateAsDateTime()));
 			//logDebug("Object: ".serialize($ctCalEntry));
 			global $wpctsync_tablename;
 			if ($isRepeating) {
@@ -319,11 +321,39 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
 				// We need to parse them properly to respect the timezone information
 				$sDate = new \DateTime($ctCalEntry->getStartDate());
 				$eDate = new \DateTime($ctCalEntry->getEndDate());
+				logDebug("EndDate without TZ conversion: ".$eDate->format('Y-m-d H:i:s T'));
 				
 				// Convert to WordPress timezone
+				logDebug("Wordpress timezone: ".wp_timezone_string());
 				$wpTimezone = new DateTimeZone(wp_timezone_string());
 				$sDate->setTimezone($wpTimezone);
-				$eDate->setTimezone($wpTimezone);
+				
+				// WORKAROUND for DST issue in ChurchTools API library
+				// (https://github.com/5pm-HDH/churchtools-api/issues/227)
+				// When an event spans DST transition (summer->winter), the end time
+				// is incorrectly pre-converted by the library, causing a 1-hour offset.
+				// We detect this by checking if the start and end dates have different DST offsets.
+				$originalEndDate = new \DateTime($ctCalEntry->getEndDate());
+				$startDateInWpTz = clone $sDate;
+				$endDateInWpTz = clone $originalEndDate;
+				$endDateInWpTz->setTimezone($wpTimezone);
+				
+				// Check if DST offset changed between start and end
+				$startOffset = $startDateInWpTz->getOffset();
+				$endOffset = $endDateInWpTz->getOffset();
+				
+				if ($startOffset != $endOffset) {
+					logDebug("DST transition detected - Start offset: ".$startOffset.", End offset: ".$endOffset);
+					// The ChurchTools API has already incorrectly adjusted the end time
+					// We need to correct this by adding back the difference
+					$offsetDiff = $endOffset - $startOffset;
+					logDebug("Applying DST correction: adding ".$offsetDiff." seconds to end time");
+					$endDateInWpTz->modify("+{$offsetDiff} seconds");
+					$eDate = $endDateInWpTz;
+					logDebug("Corrected EndDate: ".$eDate->format('Y-m-d H:i:s T'));
+				} else {
+					$eDate->setTimezone($wpTimezone);
+				}
 				
 				logDebug("StartDate: ".$sDate->format('Y-m-d H:i:s T'));
 				logDebug("EndDate: ".$eDate->format('Y-m-d H:i:s T'));
