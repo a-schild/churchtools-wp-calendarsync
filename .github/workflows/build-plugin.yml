@@ -23,13 +23,15 @@ jobs:
       - name: Create artifact
         uses: montudor/action-zip@v0.1.0
         with:
-          args: zip -X -r ${{ github.event.repository.name }}.${{  github.ref_name }}.zip . -x *.git* 
+          args: zip -X -r ${{ github.event.repository.name }}.zip . -x *.git* 
       - name: Upload binaries to release
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: ${{ github.event.repository.name }}.${{  github.ref_name }}.zip
-          asset_name: ${{ github.event.repository.name }}.${{  github.ref_name }}.zip
+          # Don't add the version tag to the zip file, otherwise WP
+          # plugin install/update will not upgrade existing plugin instance
+          file: ${{ github.event.repository.name }}.zip
+          asset_name: churchtools-wp-sync.zip
           tag: ${{ github.ref }}
           overwrite: true
 #          body: "This is my release text"
