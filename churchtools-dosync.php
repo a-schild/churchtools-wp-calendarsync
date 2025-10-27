@@ -174,7 +174,8 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
 				logDebug("Found mapping for ct id: ".$ctCalEntry->getId()." so already synched in the past");
 				$event= em_get_event($result[0]->wp_id);
 				// Make sure we are an event
-				$event->event_type= "event";
+				// Note: Changed from "event" to "single" in Events Manager 7.1+ to avoid confusion with CPTs
+				$event->event_type= "single";
 				if ($event->ID != null ){
 					// OK, still existing, make sure it's not in trash
 					// logDebug(serialize($event));
@@ -187,7 +188,7 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
 							$wpdb->query($wpdb->prepare("DELETE FROM ".$wpctsync_tablename." WHERE ct_id=".$ctCalEntry->getId()));
 						}
 						$event= new EM_Event(false);
-						$event->event_type= "event";
+						$event->event_type= "single";
 						$addMode= true;
 					} else {
 						logDebug("Event status in wordpress ". $event->event_status);
@@ -210,7 +211,7 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
 			} else {
 				logDebug("No mapping for event ".$ctCalEntry->getId()." found, so create a new one");
 				$event= new EM_Event(false);
-				$event->event_type= "event";
+				$event->event_type= "single";
 				$addMode= true;
 			}
 			//logDebug("Query result: ".serialize($result));
