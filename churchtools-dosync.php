@@ -872,3 +872,93 @@ function get_attachment_id_by_filename($subPath, $filename) {
     
     return $query->posts ? $query->posts[0] : false;
 }
+
+/**
+ * One-time migration for Events Manager 7.1+ compatibility
+ *
+ * Updates all existing synced events to use:
+ * - event_type = "single" (changed from "event" in EM 7.1+)
+ * - post_status = "publish" (required for proper display in EM 7.x)
+ *
+ * This function is called automatically on plugin load if migration hasn't been run yet.
+ */
+function ctwpsync_migrate_to_em71() {
+    global $wpdb;
+    global $wpctsync_tablename;
+
+    // Check if migration has already been run
+    $migration_completed = get_option('ctwpsync_em71_migration_completed');
+    if ($migration_completed) {
+        logDebug("Events Manager 7.1+ migration already completed, skipping");
+        return;
+    }
+
+    logInfo("Starting Events Manager 7.1+ migration for existing events");
+
+    // Get all mapped events
+    $mapped_events = $wpdb->get_results("SELECT wp_id FROM {$wpctsync_tablename}");
+
+    if (!$mapped_events || count($mapped_events) == 0) {
+        logInfo("No existing events found to migrate");
+        update_option('ctwpsync_em71_migration_completed', true);
+        return;
+    }
+
+    $total_events = count($mapped_events);
+    $updated_count = 0;
+    $error_count = 0;
+
+    logInfo("Found {$total_events} events to migrate");
+
+    foreach ($mapped_events as $mapped_event) {
+        $wp_event_id = $mapped_event->wp_id;
+
+        try {
+            // Load the event
+            $event = em_get_event($wp_event_id);
+
+            if (!$event || !$event->ID) {
+                logDebug("Event {$wp_event_id} not found in WordPress, skipping");
+                continue;
+            }
+
+            // Update event_type to "single" for Events Manager 7.1+
+            $event->event_type = "single";
+
+            // Set RSVP to false (required for EM 5.8+)
+            $event->event_rsvp = false;
+
+            // Save the event
+            $save_result = $event->save();
+
+            if ($save_result) {
+                // Set post_status to 'publish' for Events Manager 7.x
+                wp_update_post(array(
+                    'ID' => $event->post_id,
+                    'post_status' => 'publish'
+                ));
+
+                $updated_count++;
+                logDebug("Successfully migrated event {$wp_event_id}");
+            } else {
+                $error_count++;
+                logError("Failed to save event {$wp_event_id} during migration");
+            }
+
+        } catch (Exception $e) {
+            $error_count++;
+            logError("Error migrating event {$wp_event_id}: " . $e->getMessage());
+        }
+    }
+
+    // Mark migration as completed
+    update_option('ctwpsync_em71_migration_completed', true);
+
+    logInfo("Events Manager 7.1+ migration completed: {$updated_count} events updated, {$error_count} errors");
+
+    return array(
+        'total' => $total_events,
+        'updated' => $updated_count,
+        'errors' => $error_count
+    );
+}

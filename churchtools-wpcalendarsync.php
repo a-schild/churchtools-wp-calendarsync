@@ -182,6 +182,22 @@ function ctwpsync_initplugin()
         $sql= "alter table `".$table_name."` ADD INDEX `ct_id` (`ct_id`);";
         $wpdb->query($sql);
     }
+
+    // Run one-time migration for Events Manager 7.1+ compatibility
+    // This updates existing events to use event_type="single" and post_status="publish"
+    if (is_plugin_active('events-manager/events-manager.php')) {
+        // Check if migration is needed (hasn't been run yet)
+        $migration_completed = get_option('ctwpsync_em71_migration_completed');
+        if (!$migration_completed) {
+            // Include the sync file to make migration function available
+            include_once(plugin_dir_path(__FILE__) . 'churchtools-dosync.php');
+
+            // Run the migration
+            if (function_exists('ctwpsync_migrate_to_em71')) {
+                ctwpsync_migrate_to_em71();
+            }
+        }
+    }
 }
 add_action( 'plugins_loaded', 'ctwpsync_initplugin' );
 

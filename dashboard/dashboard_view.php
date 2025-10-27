@@ -22,4 +22,19 @@
 		<p><strong>Last updated:</strong> <?php echo $lastupdated; ?></p>
 		<p><strong>Sync duration:</strong> <?php echo $lastsyncduration; ?></p>
  	</div>
+
+	<hr>
+	<h3>Events Manager 7.1+ Compatibility</h3>
+	<?php
+	$migration_completed = get_option('ctwpsync_em71_migration_completed');
+	if ($migration_completed) {
+		echo '<p style="color: green;">✓ Migration to Events Manager 7.1+ completed</p>';
+		echo '<p>All existing events have been updated with the correct event_type and post_status for Events Manager 7.1+</p>';
+	} else {
+		echo '<p style="color: orange;">⚠ Migration pending</p>';
+		echo '<p>Existing events need to be migrated for Events Manager 7.1+ compatibility.</p>';
+		echo '<p>The migration will run automatically on the next plugin load or sync cycle.</p>';
+		echo '<p>To manually trigger the migration now, reload this page.</p>';
+	}
+	?>
 </div>
