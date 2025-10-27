@@ -384,9 +384,19 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
 	//                }
 				}
 			}
+			// Fix for Events Manager 5.8+ and 7.x - RSVP must be explicitly set to false
+			$event->event_rsvp = false;
 			$saveResult= $event->save();
 			if ($saveResult) {
 				logDebug("Saved ct event id: ".$ctCalEntry->getId(). " WP event ID ".$event->event_id." post id: ".$event->ID." result: ".$saveResult." serialized: ".serialize($saveResult) );
+
+				// Set post_status to 'publish' so the event is displayed on the website
+				// This is especially important for Events Manager 7.x
+				wp_update_post(array(
+					'ID' => $event->post_id,
+					'post_status' => 'publish'
+				));
+
 				if ($imageURL != null) {
 					$attachmentID= setEventImage($imageURL, $imageName, $event->ID, $sDate);
 					logDebug("Attached image ".$imageName." from ".$imageURL." as attachement ".$attachmentID);
