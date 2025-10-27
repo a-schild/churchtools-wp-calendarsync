@@ -1,9 +1,74 @@
 # churchtools-wp-calendarsync changelog
 
-## 2023-09-30
-- Automatic release build via github actions when
-  tag is pushed
-- Use correct composer.lock file for churchtools api
+## 2025-09-05
+- Release v1.0.16
+  Packaging problem in github actions
+- Release v1.0.15
+- Wrap code in transaction to prevent duplicate events
+- Handle events correctly, when end time is in another DST state
+  This time it works, problem is
+  https://github.com/5pm-HDH/churchtools-api/issues/227
+
+## 2025-09-04
+- Release v1.0.14
+- Handle events correctly, when end time is in another DST state
+  (Thanks to #Fearless-88)
+
+## 2025-06-25
+- Release v1.0.13
+- Small fix for all day events (Thanks to #Fearless-88)
+
+## 2025-06-21
+- Release v1.0.12
+- Small fix to attach images if found
+
+## 2025-06-21
+- Release v1.0.11
+- Added support for Event Manager 7.x
+- Check for existing images before uploading
+  Prevents duplicate uploads
+- Upload images in folder with year+month of event
+
+## 2025-04-04
+- Release v1.0.10
+- Set log level for flyer handling to debug when not modifying wp database
+- Release v1.0.9
+- Make sure to not reupload file if already present in WP
+- Set log level to info
+
+## 2024-05-13
+- Release v1.0.8
+- Merged in link replacement pull request from JonFStr (Thanks)
+  You can now also use this macro to embedd the link in the post content
+  #LINK:Mehr infos unter diesem Link:#
+- Make sure link starts with http:// or https://, otherwise we prefix it with https://
+- Add one file attachment, if we find a event file attachement which has "flyer"
+  in the file name
+  The link to the flyer can also be used with a placeholder #FLYER:Mehr infos auf dem Flyer:#
+
+## 2024-02-15
+- Release v1.0.7
+  Fix issue with double quotes introduced in 1.0.6
+
+## 2023-11-10
+- Release v1.0.6
+- DB column should not be unique, otherwise we can't save repeating events in mapping
+- Release v1.0.5
+- Fix branch condition to process categories when no resource type mapping is enabled
+
+## 2023-11-09
+- Release v1.0.4
+- Allow NULL values in more columns
+
+## 2023-11-07
+- Release v1.0.3
+- Fix versioning
+- Fix sql data type error on new installations
+- Release v1.0.2
+
+## 2023-10-16
+- Correctly handle repeating events
+- Release v1.0.1
 
 ## 2023-09-29
 - Change licence from Apache 2.0 to GNU GPL 2

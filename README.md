@@ -19,10 +19,11 @@ https://de.wordpress.org/plugins/events-manager/
 - Sync window is specified by n days in the past and m days in the future
 - Uses the modern REST api of churchtools
 - Creates logfile in the plugin folder, configurable log levels
+- Embedd event link on bottom of text or replace #LINK:<text>:# with the link
+- Attach flyer from event files, link can be customized via #FLYER:Mehr infos im Flyer:#
 
 ### Room for improvement (and/or missing features)
 - Build wordpress package via github actions
-- Handle recurrence of events (perhaps)
 - Configure log level from wordpress UI
 - Show log in wordpress UI
 - Take event information over to wordpress
@@ -32,9 +33,8 @@ https://de.wordpress.org/plugins/events-manager/
 - Notify someone about sync problems
 - Better error handling in the sync process
 - Link config screen directly from plugins list
-- When an image is removed in churchtools, then remove it in wordpress too
-  (Replacing images already works)
 - Make plugin (and updates) available via wordpress plugins site
+- Handle recurrence of events as recurrence in wp too (perhaps)
 
 ### Reason for this way of integration
 One of biggest advantages of this approach is the fact,
@@ -46,8 +46,10 @@ event manager, the church tool sync process will not touch these.
 
 ## Installation of the plugin
 - Make sure to have the events manager plugin installed and activated
-- Download the plugin from https://github.com/a-schild/churchtools-wp-calendarsync/releases
-- Upload and activate it in your wordpress installation
+- Checkout the source from to the wp-content/plugins folder
+  in a folder named churchtools-wpcalendarsync
+- Change to this folder
+- Install the dependencies with `composer install`
 
 ## Configuration of the plugin
 - We recommend to create a ctsync or similar wp account,
