@@ -1,5 +1,24 @@
 # churchtools-wp-calendarsync changelog
 
+## 2025-10-29
+- Release v1.1.0
+- **Events Manager 7.2+ Compatibility**
+  - Added migration to set `event_archetype` field to "event" for all existing events
+  - Set `event_archetype` field automatically for all new events
+  - Fixed taxonomy constant `EM_TAXONOMY_CATEGORY` not being defined in EM 7.2+
+  - Fixed `get_terms()` call to use correct array format for WordPress 4.5+
+- **PHP 8+ Compatibility Fixes**
+  - Fixed fatal error: `sizeof()` cannot accept `WP_Error` objects (line 578)
+  - Fixed deprecation warning: `trim()` now handles null values correctly (line 231)
+- **Cron Job Improvements**
+  - Fixed duplicate cron events being scheduled
+  - Added automatic cleanup of duplicate scheduled events on plugin load
+  - Clear all existing cron events before scheduling new ones during activation
+- **Build & Release**
+  - Updated GitHub Actions workflow to include version in zip filename
+  - Plugin files now packaged in proper folder structure inside zip
+  - Improved release automation
+
 ## 2025-09-05
 - Release v1.0.16
   Packaging problem in github actions
