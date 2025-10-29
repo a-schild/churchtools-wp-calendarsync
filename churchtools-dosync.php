@@ -229,8 +229,10 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
 			// logDebug(serialize($ctCalEntry));
 			if ($ctCalEntry->getAddress() != null) {
 				$locationID= getCreateLocation($ctCalEntry->getAddress());
-				if (isset($locationID)) {
+				if (isset($locationID) && $locationID !== null) {
 					$event->location_id= $locationID;
+				} else {
+					logInfo("Could not create/find location for event: ".$ctCalEntry->getCaption());
 				}
 			}
 			$event->event_timezone= wp_timezone_string(); // Fix it to the default WP default timezone
@@ -500,45 +502,75 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
 function getCreateLocation(Address $appointmentAddress) {
      if ($appointmentAddress != null) {
          // logDebug("CT Location address is: ".serialize($appointmentAddress));
-         $appointmentAddress->getMeetingAt(); // Ortsangabe (Zentrum Ipsach etc.)
-         $appointmentAddress->getAddition(); // Weitere Ortsangabe
-         $appointmentAddress->getStreet(); // Strasse
-         $appointmentAddress->getZip(); // PLZ
-         $appointmentAddress->getCity(); // Ort
-         $appointmentAddress->getDistrict(); // Kanton
-         $appointmentAddress->getCountry(); // Land 2-ISO code
-         $appointmentAddress->getLatitude(); // Latitude
-         $appointmentAddress->getLongitude(); // Longitude
-         
+         $meetingAt = $appointmentAddress->getMeetingAt(); // Ortsangabe (Zentrum Ipsach etc.)
+         $addition = $appointmentAddress->getAddition(); // Weitere Ortsangabe
+         $street = $appointmentAddress->getStreet(); // Strasse
+         $zip = $appointmentAddress->getZip(); // PLZ
+         $city = $appointmentAddress->getCity(); // Ort
+         $district = $appointmentAddress->getDistrict(); // Kanton
+         $country = $appointmentAddress->getCountry(); // Land 2-ISO code
+         $latitude = $appointmentAddress->getLatitude(); // Latitude
+         $longitude = $appointmentAddress->getLongitude(); // Longitude
+
+         // Generate a fallback name if meetingAt is empty
+         // Events Manager requires a location name to save the location
+         $locationName = $meetingAt;
+         if (empty($locationName)) {
+             // Build a fallback name from available address components
+             $nameParts = array();
+             if (!empty($street)) $nameParts[] = $street;
+             if (!empty($city)) $nameParts[] = $city;
+             if (!empty($district)) $nameParts[] = $district;
+
+             if (count($nameParts) > 0) {
+                 $locationName = implode(', ', $nameParts);
+                 logInfo("Location has no name (meetingAt), using fallback: " . $locationName);
+             } else {
+                 // Last resort: use coordinates or "Unknown Location"
+                 if (!empty($latitude) && !empty($longitude)) {
+                     $locationName = "Location at " . $latitude . ", " . $longitude;
+                 } else {
+                     $locationName = "Unknown Location";
+                 }
+                 logInfo("Location has no name or address, using fallback: " . $locationName);
+             }
+         }
+
          $emLocations= EM_Locations::get();
          $matchedLocation= null;
          foreach ($emLocations as $key => $emLocation) {
-             if ($appointmentAddress->getMeetingAt() == $emLocation->name && 
-                 $appointmentAddress->getCity() == $emLocation->town && 
-                 $appointmentAddress->getZip() == $emLocation->postcode &&
-                 $appointmentAddress->getCountry() == $emLocation->location_country
+             if ($locationName == $emLocation->name &&
+                 $city == $emLocation->town &&
+                 $zip == $emLocation->postcode &&
+                 $country == $emLocation->location_country
                  ) {
                     $matchedLocation= $emLocation;
                     break;
              }
          }
          if ($matchedLocation != null) {
-            logDebug("Location found: ".$appointmentAddress->getMeetingAt()." ".$appointmentAddress->getZip()." ".$appointmentAddress->getCity()." ".$appointmentAddress->getCountry());
+            logDebug("Location found: ".$locationName." ".$zip." ".$city." ".$country);
             return $matchedLocation->id;
          } else {
-             logInfo("Creating new location for ".$appointmentAddress->getMeetingAt()." ".$appointmentAddress->getZip()." ".$appointmentAddress->getCity()." ".$appointmentAddress->getCountry());
+             logInfo("Creating new location for ".$locationName." ".$zip." ".$city." ".$country);
              // Create new location
              $newLocation= new EM_Location();
-             $newLocation->name= $appointmentAddress->getMeetingAt();
-             $newLocation->location_street= $appointmentAddress->getStreet();
-             $newLocation->location_town= $appointmentAddress->getCity();
-             $newLocation->location_postcode= $appointmentAddress->getZip();
-             $newLocation->location_state= $appointmentAddress->getDistrict();
-             $newLocation->location_country= $appointmentAddress->getCountry();
-             $newLocation->location_latitude= $appointmentAddress->getLatitude();
-             $newLocation->location_longitude= $appointmentAddress->getLongitude();
-             $newLocation->save();
-             return $newLocation->id;
+             $newLocation->name= $locationName;
+             $newLocation->location_street= $street;
+             $newLocation->location_town= $city;
+             $newLocation->location_postcode= $zip;
+             $newLocation->location_state= $district;
+             $newLocation->location_country= $country;
+             $newLocation->location_latitude= $latitude;
+             $newLocation->location_longitude= $longitude;
+             $saveResult = $newLocation->save();
+             if ($saveResult) {
+                 logDebug("Location created successfully with ID: " . $newLocation->id);
+                 return $newLocation->id;
+             } else {
+                 logError("Failed to create location: " . $locationName);
+                 return null;
+             }
          }
      }
 }
