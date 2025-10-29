@@ -176,6 +176,7 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
 				// Make sure we are an event
 				// Note: Changed from "event" to "single" in Events Manager 7.1+ to avoid confusion with CPTs
 				$event->event_type= "single";
+				$event->event_archetype= "event"; // Required for Events Manager 7.2+
 				if ($event->ID != null ){
 					// OK, still existing, make sure it's not in trash
 					// logDebug(serialize($event));
@@ -189,6 +190,7 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
 						}
 						$event= new EM_Event(false);
 						$event->event_type= "single";
+						$event->event_archetype= "event"; // Required for Events Manager 7.2+
 						$addMode= true;
 					} else {
 						logDebug("Event status in wordpress ". $event->event_status);
@@ -212,6 +214,7 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
 				logDebug("No mapping for event ".$ctCalEntry->getId()." found, so create a new one");
 				$event= new EM_Event(false);
 				$event->event_type= "single";
+				$event->event_archetype= "event"; // Required for Events Manager 7.2+
 				$addMode= true;
 			}
 			//logDebug("Query result: ".serialize($result));
@@ -228,7 +231,7 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
 
 			//Cache link and information
 			$ctLink = $ctCalEntry->getLink();
-			if (strlen(trim($ctLink)) > 0) {
+			if ($ctLink !== null && strlen(trim($ctLink)) > 0) {
 				if (!(str_starts_with($ctLink, "http://") || (str_starts_with($ctLink, "https://")))) {
 					$ctLink = "https://" . $ctLink;
 				}
@@ -575,7 +578,9 @@ function updateEventCategories(array $calendars_categories_mapping, int $resourc
 			$taxFilter = array( 'taxonomy' => EM_TAXONOMY_CATEGORY, 'name' => $desiredCategory, 'hide_empty' => false);
 			$wpCategories= get_terms($taxFilter);
 			// logDebug("Results: ".sizeof($wpCategories));
-			if (sizeof($wpCategories) >= 1) {
+			if (is_wp_error($wpCategories)) {
+				logError("Error getting terms for category ".$desiredCategory.": ".$wpCategories->get_error_message());
+			} elseif (sizeof($wpCategories) >= 1) {
 				logDebug("Found matching wp category: ".$desiredCategory . " wp: ".$wpCategories[0]->term_id);
 				array_push($wpDesiredCategories, $wpCategories[0]->term_id);
 			} else {
@@ -960,5 +965,56 @@ function ctwpsync_migrate_to_em71() {
         'total' => $total_events,
         'updated' => $updated_count,
         'errors' => $error_count
+    );
+}
+
+/**
+ * Migrate existing events to Events Manager 7.2+ format
+ * Sets the eventarchetype field to "event" for all existing events
+ * This is required for events to be displayed in Events Manager 7.2+
+ */
+function ctwpsync_migrate_to_em72() {
+    global $wpdb;
+
+    // Check if migration has already been run (v2 uses correct field name with underscore)
+    $migration_completed = get_option('ctwpsync_em72_migration_completed_v2');
+    if ($migration_completed) {
+        logDebug("Events Manager 7.2+ migration already completed, skipping");
+        return;
+    }
+
+    logInfo("Starting Events Manager 7.2+ migration for existing events (event_archetype field)");
+
+    // Get the Events Manager events table name
+    $em_events_table = $wpdb->prefix . 'em_events';
+
+    // Check if the event_archetype column exists in the em_events table
+    $column_exists = $wpdb->get_results("SHOW COLUMNS FROM `{$em_events_table}` LIKE 'event_archetype'");
+
+    if (count($column_exists) == 0) {
+        logInfo("event_archetype column does not exist in em_events table, skipping migration");
+        update_option('ctwpsync_em72_migration_completed_v2', true);
+        return;
+    }
+
+    // Update all events where event_archetype is NULL to "event"
+    $result = $wpdb->query(
+        "UPDATE `{$em_events_table}`
+         SET `event_archetype` = 'event'
+         WHERE `event_archetype` IS NULL"
+    );
+
+    if ($result === false) {
+        logError("Failed to update event_archetype field during migration");
+        return;
+    }
+
+    // Mark migration as completed
+    update_option('ctwpsync_em72_migration_completed_v2', true);
+
+    logInfo("Events Manager 7.2+ migration completed: {$result} events updated");
+
+    return array(
+        'updated' => $result
     );
 }

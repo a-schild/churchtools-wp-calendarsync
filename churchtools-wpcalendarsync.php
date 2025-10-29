@@ -197,6 +197,19 @@ function ctwpsync_initplugin()
                 ctwpsync_migrate_to_em71();
             }
         }
+
+        // Run one-time migration for Events Manager 7.2+ compatibility
+        // This sets event_archetype="event" for all existing events
+        $migration72_completed = get_option('ctwpsync_em72_migration_completed_v2');
+        if (!$migration72_completed) {
+            // Include the sync file to make migration function available
+            include_once(plugin_dir_path(__FILE__) . 'churchtools-dosync.php');
+
+            // Run the migration
+            if (function_exists('ctwpsync_migrate_to_em72')) {
+                ctwpsync_migrate_to_em72();
+            }
+        }
     }
 }
 add_action( 'plugins_loaded', 'ctwpsync_initplugin' );
