@@ -113,11 +113,15 @@ function save_ctwpsync_settings() {
  */
 register_activation_hook( __FILE__, 'ctwpsync_activation' );
 function ctwpsync_activation() {
-	if ( ! wp_next_scheduled ( 'ctwpsync_hourly_event' ) ) {
-        // Store the logged in user, so the cron job works as the same user
-        $args = [ is_user_logged_in(), wp_get_current_user() ];
-		wp_schedule_event( current_time( 'timestamp' ), 'hourly', 'ctwpsync_hourly_event', $args);
-	}
+	// Clear ALL existing scheduled events for this hook first to prevent duplicates
+	// This is necessary because wp_next_scheduled() doesn't check arguments,
+	// so multiple events with different args can be scheduled
+	wp_clear_scheduled_hook( 'ctwpsync_hourly_event' );
+
+	// Now schedule a fresh event
+	// Store the logged in user, so the cron job works as the same user
+	$args = [ is_user_logged_in(), wp_get_current_user() ];
+	wp_schedule_event( current_time( 'timestamp' ), 'hourly', 'ctwpsync_hourly_event', $args);
 }
 /**
  * Hook the function to run every hour
@@ -151,6 +155,40 @@ function ctwpsync_deactivation() {
 function ctwpsync_initplugin()
 {
     global $wpdb;
+
+    // Clean up duplicate cron events that may have been created
+    // Get all scheduled events for our hook
+    $cron_array = _get_cron_array();
+    $hook_name = 'ctwpsync_hourly_event';
+    $scheduled_events = array();
+
+    if (is_array($cron_array)) {
+        foreach ($cron_array as $timestamp => $cron) {
+            if (isset($cron[$hook_name])) {
+                foreach ($cron[$hook_name] as $hash => $event) {
+                    $scheduled_events[] = array(
+                        'timestamp' => $timestamp,
+                        'hash' => $hash,
+                        'args' => isset($event['args']) ? $event['args'] : array()
+                    );
+                }
+            }
+        }
+    }
+
+    // If we have more than one scheduled event, keep only the most recent one
+    if (count($scheduled_events) > 1) {
+        // Sort by timestamp descending (most recent first)
+        usort($scheduled_events, function($a, $b) {
+            return $b['timestamp'] - $a['timestamp'];
+        });
+
+        // Remove all except the first (most recent) one
+        for ($i = 1; $i < count($scheduled_events); $i++) {
+            wp_unschedule_event($scheduled_events[$i]['timestamp'], $hook_name, $scheduled_events[$i]['args']);
+        }
+    }
+
     $table_name = $wpdb->prefix.'ctwpsync_mapping';
     $sql = "CREATE TABLE ".$table_name." (
             id mediumint(9) NOT NULL AUTO_INCREMENT,
