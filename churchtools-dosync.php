@@ -35,6 +35,13 @@ if (!is_plugin_active('events-manager/events-manager.php')) {
     logError("We need an activated events manager plugin, doing nothing");
     return;
 }
+
+// Define taxonomy constant if not already defined by Events Manager
+// In EM 7.2+, the constant might not be defined, so we set it to the correct taxonomy name
+if (!defined('EM_TAXONOMY_CATEGORY')) {
+    define('EM_TAXONOMY_CATEGORY', 'event-categories');
+}
+
 // Make sure it's configured, else do nothing
 if(empty($options) || empty($options['url']) || empty($options['apitoken'])){
     logError("No sync options found, (url and/or api token missing), doing nothing");
@@ -575,7 +582,8 @@ function updateEventCategories(array $calendars_categories_mapping, int $resourc
 	if (sizeof($desiredCategories) > 0) {
 		$wpDesiredCategories= [];
 		foreach ($desiredCategories as $dcKey => $desiredCategory) {
-			$taxFilter = array( 'taxonomy' => EM_TAXONOMY_CATEGORY, 'name' => $desiredCategory, 'hide_empty' => false);
+			// In WordPress 4.5+, the taxonomy parameter must be an array
+			$taxFilter = array( 'taxonomy' => array(EM_TAXONOMY_CATEGORY), 'name' => $desiredCategory, 'hide_empty' => false);
 			$wpCategories= get_terms($taxFilter);
 			// logDebug("Results: ".sizeof($wpCategories));
 			if (is_wp_error($wpCategories)) {
