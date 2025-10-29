@@ -10,7 +10,7 @@
  * Plugin Name:       Churchtools WP Calendarsync
  * Plugin URI:        https://github.com/a-schild/churchtools-wp-calendarsync
  * Description:       Churchtools wordpress calendar sync to events manager, requires "Events Manager" plugin. The sync is scheduled every hour to update WP events from churchtool.
- * Version:           1.0.15
+ * Version:           1.1.0
  * Author:            André Schild
  * Author URI:        https://github.com/a-schild/churchtools-wp-calendarsync/
  * License:           GPLv2 or later 
@@ -33,7 +33,7 @@ add_action('save_ctwpsync_settings', 'save_ctwpsync_settings' );
  * Start at version 1.0.0 and use SemVer - https://semver.org
  * Rename this for your plugin and update it as you release new versions.
  */
-define( 'CTWPSYNC_VERSION', '1.0.15' );
+define( 'CTWPSYNC_VERSION', '1.1.0' );
 
 function ctwpsync_setup_menu() {
 	add_options_page('ChurchTools Calendar Importer','ChurchTools Calsync','manage_options','churchtools-wpcalendarsync','ctwpsync_dashboard');
@@ -113,11 +113,15 @@ function save_ctwpsync_settings() {
  */
 register_activation_hook( __FILE__, 'ctwpsync_activation' );
 function ctwpsync_activation() {
-	if ( ! wp_next_scheduled ( 'ctwpsync_hourly_event' ) ) {
-        // Store the logged in user, so the cron job works as the same user
-        $args = [ is_user_logged_in(), wp_get_current_user() ];
-		wp_schedule_event( current_time( 'timestamp' ), 'hourly', 'ctwpsync_hourly_event', $args);
-	}
+	// Clear ALL existing scheduled events for this hook first to prevent duplicates
+	// This is necessary because wp_next_scheduled() doesn't check arguments,
+	// so multiple events with different args can be scheduled
+	wp_clear_scheduled_hook( 'ctwpsync_hourly_event' );
+
+	// Now schedule a fresh event
+	// Store the logged in user, so the cron job works as the same user
+	$args = [ is_user_logged_in(), wp_get_current_user() ];
+	wp_schedule_event( current_time( 'timestamp' ), 'hourly', 'ctwpsync_hourly_event', $args);
 }
 /**
  * Hook the function to run every hour
@@ -151,6 +155,40 @@ function ctwpsync_deactivation() {
 function ctwpsync_initplugin()
 {
     global $wpdb;
+
+    // Clean up duplicate cron events that may have been created
+    // Get all scheduled events for our hook
+    $cron_array = _get_cron_array();
+    $hook_name = 'ctwpsync_hourly_event';
+    $scheduled_events = array();
+
+    if (is_array($cron_array)) {
+        foreach ($cron_array as $timestamp => $cron) {
+            if (isset($cron[$hook_name])) {
+                foreach ($cron[$hook_name] as $hash => $event) {
+                    $scheduled_events[] = array(
+                        'timestamp' => $timestamp,
+                        'hash' => $hash,
+                        'args' => isset($event['args']) ? $event['args'] : array()
+                    );
+                }
+            }
+        }
+    }
+
+    // If we have more than one scheduled event, keep only the most recent one
+    if (count($scheduled_events) > 1) {
+        // Sort by timestamp descending (most recent first)
+        usort($scheduled_events, function($a, $b) {
+            return $b['timestamp'] - $a['timestamp'];
+        });
+
+        // Remove all except the first (most recent) one
+        for ($i = 1; $i < count($scheduled_events); $i++) {
+            wp_unschedule_event($scheduled_events[$i]['timestamp'], $hook_name, $scheduled_events[$i]['args']);
+        }
+    }
+
     $table_name = $wpdb->prefix.'ctwpsync_mapping';
     $sql = "CREATE TABLE ".$table_name." (
             id mediumint(9) NOT NULL AUTO_INCREMENT,
@@ -181,6 +219,35 @@ function ctwpsync_initplugin()
         $wpdb->query($sql);
         $sql= "alter table `".$table_name."` ADD INDEX `ct_id` (`ct_id`);";
         $wpdb->query($sql);
+    }
+
+    // Run one-time migration for Events Manager 7.1+ compatibility
+    // This updates existing events to use event_type="single" and post_status="publish"
+    if (is_plugin_active('events-manager/events-manager.php')) {
+        // Check if migration is needed (hasn't been run yet)
+        $migration_completed = get_option('ctwpsync_em71_migration_completed');
+        if (!$migration_completed) {
+            // Include the sync file to make migration function available
+            include_once(plugin_dir_path(__FILE__) . 'churchtools-dosync.php');
+
+            // Run the migration
+            if (function_exists('ctwpsync_migrate_to_em71')) {
+                ctwpsync_migrate_to_em71();
+            }
+        }
+
+        // Run one-time migration for Events Manager 7.2+ compatibility
+        // This sets event_archetype="event" for all existing events
+        $migration72_completed = get_option('ctwpsync_em72_migration_completed_v2');
+        if (!$migration72_completed) {
+            // Include the sync file to make migration function available
+            include_once(plugin_dir_path(__FILE__) . 'churchtools-dosync.php');
+
+            // Run the migration
+            if (function_exists('ctwpsync_migrate_to_em72')) {
+                ctwpsync_migrate_to_em72();
+            }
+        }
     }
 }
 add_action( 'plugins_loaded', 'ctwpsync_initplugin' );

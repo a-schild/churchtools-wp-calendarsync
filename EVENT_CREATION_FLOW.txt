@@ -1,0 +1,235 @@
+EVENT CREATION/UPDATE FLOW IN EVENTS-MANAGER
+==============================================
+
+1. FETCH FROM CHURCHTOOLS
+   AppointmentRequest::forCalendars($calendars)
+     ->where('from', $fromDate)
+     ->where('to', $toDate)
+     ->get()
+   Returns: Appointment objects
+
+2. PROCESS EACH APPOINTMENT
+   foreach ($result as $ctCalEntry)
+     processCalendarEntry($ctCalEntry, ...)
+
+3. WITHIN processCalendarEntry():
+
+   [TRANSACTION BEGIN]
+   
+   A. CHECK FOR EXISTING MAPPING
+      SELECT * FROM wp_ctwpsync_mapping WHERE ct_id = X
+      
+      If found (1 result):
+         $event = em_get_event($result[0]->wp_id)
+         $addMode = false (UPDATE)
+         Load previous image/flyer IDs
+      
+      Else:
+         $event = new EM_Event(false)
+         $addMode = true (INSERT)
+   
+   B. BUILD BASIC EVENT PROPERTIES
+      $event->event_type = "event"
+      $event->event_name = $ctCalEntry->getCaption()
+      $event->post_content = $ctInfo (with links)
+      $event->event_timezone = wp_timezone_string()
+   
+   C. HANDLE LOCATION
+      $location = getCreateLocation($ctCalEntry->getAddress())
+      $event->location_id = $location->id
+      
+      getCreateLocation() LOGIC:
+        $emLocations = EM_Locations::get()
+        Search by: name, city, ZIP, country
+        
+        If found:
+           Return existing location->id
+        Else:
+           $newLocation = new EM_Location()
+           Set: name, street, town, postcode, state, country, lat, long
+           $newLocation->save()
+           Return $newLocation->id
+   
+   D. PROCESS LINKS & CONTENT
+      Extract link from ChurchTools
+      Replace #LINK:text:# template OR append link
+      Set $event->post_content
+   
+   E. HANDLE COMBINED APPOINTMENT (Resources & Files)
+      CombinedAppointmentRequest::forAppointment(...)->get()
+      
+      For associated event:
+         FileRequest::forEvent($eventId)->get()
+         
+         For each file with "flyer" in name:
+            Download file
+            Upload to WP media via uploadFromLocalFile()
+            Get $newWPFlyerId (attachment ID)
+            Add flyer link to event content
+   
+   F. SET DATE & TIME
+      
+      If All-Day Event:
+         $event->event_start_date = Y-m-d
+         $event->event_end_date = Y-m-d
+         $event->event_all_day = 1
+      
+      Else (Timed Event):
+         Parse DateTime from ISO 8601 with timezone
+         Convert to WordPress timezone
+         Handle DST transitions (special logic)
+         
+         $event->event_start_date = Y-m-d
+         $event->event_end_date = Y-m-d
+         $event->event_start_time = H:i:s
+         $event->event_end_time = H:i:s
+         $event->event_all_day = 0
+   
+   G. HANDLE IMAGE
+      If $ctCalEntry->getImage() exists:
+         Download from ChurchTools
+         Upload via setEventImage():
+            wp_upload_bits() - Write file
+            wp_insert_attachment() - Create post
+            wp_generate_attachment_metadata() - Generate thumbnails
+            set_post_thumbnail() - Attach to event
+   
+   H. **PERSIST TO DATABASE**
+      $saveResult = $event->save()
+      
+      *** THIS IS THE KEY EVENTS-MANAGER API CALL ***
+      *** Saves to wp_posts with event data ***
+      *** Events-Manager plugin handles all database logic ***
+   
+   I. ATTACH IMAGE TO EVENT (if save successful)
+      $attachmentID = setEventImage($imageURL, $imageName, $event->ID, $sDate)
+      Returns: wp_posts attachment ID
+   
+   J. UPDATE MAPPING TABLE
+      
+      If CREATE mode ($addMode = true):
+         $wpdb->insert('wp_ctwpsync_mapping', array(
+            'ct_id' => ChurchTools ID,
+            'wp_id' => $event->event_id,
+            'ct_image_id' => ChurchTools image file ID,
+            'wp_image_id' => WordPress attachment ID,
+            'ct_flyer_id' => ChurchTools flyer file ID,
+            'wp_flyer_id' => WordPress attachment ID,
+            'last_seen' => current timestamp,
+            'event_start' => original CT start datetime,
+            'event_end' => original CT end datetime,
+            'ct_repeating' => 1 if repeating, else 0
+         ))
+      
+      If UPDATE mode:
+         UPDATE wp_ctwpsync_mapping
+         SET last_seen = current timestamp
+         WHERE ct_id = X
+         
+         (Also update image/flyer IDs if changed)
+   
+   K. UPDATE CATEGORIES
+      updateEventCategories():
+         Build list of desired categories from:
+            - Calendar ID mapping
+            - Resource bookings (if resource type specified)
+         
+         For each desired category:
+            get_terms() to find existing WP category
+            
+            If found:
+               Use category term_id
+            Else:
+               wp_insert_term() to create new category
+               Use returned term_id
+         
+         wp_set_post_terms($event->ID, $categoryIds, EM_TAXONOMY_CATEGORY)
+   
+   [COMMIT TRANSACTION]
+   
+   OR if exception:
+   [ROLLBACK TRANSACTION]
+
+4. CLEANUP OLD ENTRIES
+   cleanupOldEntries($fromDate, $processingStartTime)
+   
+   SELECT * FROM wp_ctwpsync_mapping
+   WHERE event_start >= $fromDate 
+     AND last_seen < $processingStartTime
+   
+   For each stale entry:
+      $toDelEvent = new EM_Event($wpEventID)
+      $toDelEvent->delete(false)
+      
+      DELETE FROM wp_ctwpsync_mapping WHERE id = X
+
+
+EVENTS-MANAGER DATABASE TABLES
+===============================
+
+1. wp_posts (WordPress core)
+   - Stores event as custom post type
+   - post_title = event_name
+   - post_content = event description
+   - post_author = owner/creator
+   - post_date = creation date
+
+2. wp_postmeta (WordPress core)
+   - Stores event properties:
+     _event_start_date
+     _event_end_date
+     _event_start_time
+     _event_end_time
+     _event_all_day
+     _location_id
+     _event_timezone
+     etc.
+
+3. wp_term_relationships (WordPress core)
+   - Maps categories to event post
+
+4. wp_attachments (WordPress attachments)
+   - Image files
+   - Flyer files
+   - post_parent = event post ID
+
+5. wp_ctwpsync_mapping (Custom plugin table)
+   - Tracks CT -> WP ID mapping
+   - Prevents duplicate syncs
+   - Stores file ID references
+
+
+KEY EVENTS-MANAGER API CLASSES
+===============================
+
+EM_Event
+   Constructor: new EM_Event(false) or em_get_event($id)
+   Methods: save(), delete(), get properties/methods
+   Properties: event_id, event_name, post_content, event_start_date, 
+              event_end_date, event_start_time, event_end_time,
+              event_all_day, event_timezone, location_id, ID
+
+EM_Location
+   Constructor: new EM_Location()
+   Methods: save()
+   Properties: name, location_street, location_town, location_postcode,
+              location_state, location_country, location_latitude,
+              location_longitude
+
+EM_Locations
+   Static method: EM_Locations::get() returns array of locations
+
+Functions:
+   em_get_event($id) - Retrieve event by ID
+   wp_set_post_terms($post_id, $term_ids, $taxonomy)
+   set_post_thumbnail($post_id, $attachment_id)
+
+
+TIMING CONSIDERATIONS
+======================
+- 5 minute time limit for entire sync cycle
+- ChurchTools API fetch time varies by data size
+- Image/flyer downloads add time
+- Transaction ensures atomicity
+- Repeating events tracked separately (allows multiple instances)
+

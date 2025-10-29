@@ -16,20 +16,37 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Extract version from plugin file
+        id: get_version
+        run: |
+          VERSION=$(grep -oP "Version:\s+\K[0-9.]+" churchtools-wpcalendarsync.php)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Extracted version: $VERSION"
+
       - name: Build project
         run: |
           composer install --no-dev --optimize-autoloader
-          mkdir build
-      - name: Create artifact
-        uses: montudor/action-zip@v0.1.0
-        with:
-          args: zip -X -r ${{ github.event.repository.name }}.zip . -x *.git* 
+
+      - name: Create plugin folder structure
+        run: |
+          PLUGIN_FOLDER="churchtools-wp-sync"
+          mkdir -p build/$PLUGIN_FOLDER
+
+          # Copy all files except .git and build directory into the plugin folder
+          rsync -av --exclude='.git' --exclude='build' --exclude='.github' . build/$PLUGIN_FOLDER/
+
+          # Create zip from the build directory (so the plugin folder is at the root of the zip)
+          cd build
+          zip -r churchtools-wp-sync-${{ steps.get_version.outputs.version }}.zip $PLUGIN_FOLDER
+          mv churchtools-wp-sync-${{ steps.get_version.outputs.version }}.zip ../
+          cd ..
+
       - name: Upload binaries to release
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: ${{ github.event.repository.name }}.zip
-          asset_name: churchtools-wp-sync.zip
+          file: churchtools-wp-sync-${{ steps.get_version.outputs.version }}.zip
+          asset_name: churchtools-wp-sync-${{ steps.get_version.outputs.version }}.zip
           tag: ${{ github.ref }}
           overwrite: true
-#          body: "This is my release text"

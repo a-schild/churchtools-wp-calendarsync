@@ -35,6 +35,13 @@ if (!is_plugin_active('events-manager/events-manager.php')) {
     logError("We need an activated events manager plugin, doing nothing");
     return;
 }
+
+// Define taxonomy constant if not already defined by Events Manager
+// In EM 7.2+, the constant might not be defined, so we set it to the correct taxonomy name
+if (!defined('EM_TAXONOMY_CATEGORY')) {
+    define('EM_TAXONOMY_CATEGORY', 'event-categories');
+}
+
 // Make sure it's configured, else do nothing
 if(empty($options) || empty($options['url']) || empty($options['apitoken'])){
     logError("No sync options found, (url and/or api token missing), doing nothing");
@@ -174,7 +181,9 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
 				logDebug("Found mapping for ct id: ".$ctCalEntry->getId()." so already synched in the past");
 				$event= em_get_event($result[0]->wp_id);
 				// Make sure we are an event
-				$event->event_type= "event";
+				// Note: Changed from "event" to "single" in Events Manager 7.1+ to avoid confusion with CPTs
+				$event->event_type= "single";
+				$event->event_archetype= "event"; // Required for Events Manager 7.2+
 				if ($event->ID != null ){
 					// OK, still existing, make sure it's not in trash
 					// logDebug(serialize($event));
@@ -187,7 +196,8 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
 							$wpdb->query($wpdb->prepare("DELETE FROM ".$wpctsync_tablename." WHERE ct_id=".$ctCalEntry->getId()));
 						}
 						$event= new EM_Event(false);
-						$event->event_type= "event";
+						$event->event_type= "single";
+						$event->event_archetype= "event"; // Required for Events Manager 7.2+
 						$addMode= true;
 					} else {
 						logDebug("Event status in wordpress ". $event->event_status);
@@ -210,7 +220,8 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
 			} else {
 				logDebug("No mapping for event ".$ctCalEntry->getId()." found, so create a new one");
 				$event= new EM_Event(false);
-				$event->event_type= "event";
+				$event->event_type= "single";
+				$event->event_archetype= "event"; // Required for Events Manager 7.2+
 				$addMode= true;
 			}
 			//logDebug("Query result: ".serialize($result));
@@ -227,7 +238,7 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
 
 			//Cache link and information
 			$ctLink = $ctCalEntry->getLink();
-			if (strlen(trim($ctLink)) > 0) {
+			if ($ctLink !== null && strlen(trim($ctLink)) > 0) {
 				if (!(str_starts_with($ctLink, "http://") || (str_starts_with($ctLink, "https://")))) {
 					$ctLink = "https://" . $ctLink;
 				}
@@ -384,9 +395,19 @@ function processCalendarEntry(Appointment $ctCalEntry, array $calendars_categori
 	//                }
 				}
 			}
+			// Fix for Events Manager 5.8+ and 7.x - RSVP must be explicitly set to false
+			$event->event_rsvp = false;
 			$saveResult= $event->save();
 			if ($saveResult) {
 				logDebug("Saved ct event id: ".$ctCalEntry->getId(). " WP event ID ".$event->event_id." post id: ".$event->ID." result: ".$saveResult." serialized: ".serialize($saveResult) );
+
+				// Set post_status to 'publish' so the event is displayed on the website
+				// This is especially important for Events Manager 7.x
+				wp_update_post(array(
+					'ID' => $event->post_id,
+					'post_status' => 'publish'
+				));
+
 				if ($imageURL != null) {
 					$attachmentID= setEventImage($imageURL, $imageName, $event->ID, $sDate);
 					logDebug("Attached image ".$imageName." from ".$imageURL." as attachement ".$attachmentID);
@@ -561,10 +582,13 @@ function updateEventCategories(array $calendars_categories_mapping, int $resourc
 	if (sizeof($desiredCategories) > 0) {
 		$wpDesiredCategories= [];
 		foreach ($desiredCategories as $dcKey => $desiredCategory) {
-			$taxFilter = array( 'taxonomy' => EM_TAXONOMY_CATEGORY, 'name' => $desiredCategory, 'hide_empty' => false);
+			// In WordPress 4.5+, the taxonomy parameter must be an array
+			$taxFilter = array( 'taxonomy' => array(EM_TAXONOMY_CATEGORY), 'name' => $desiredCategory, 'hide_empty' => false);
 			$wpCategories= get_terms($taxFilter);
 			// logDebug("Results: ".sizeof($wpCategories));
-			if (sizeof($wpCategories) >= 1) {
+			if (is_wp_error($wpCategories)) {
+				logError("Error getting terms for category ".$desiredCategory.": ".$wpCategories->get_error_message());
+			} elseif (sizeof($wpCategories) >= 1) {
 				logDebug("Found matching wp category: ".$desiredCategory . " wp: ".$wpCategories[0]->term_id);
 				array_push($wpDesiredCategories, $wpCategories[0]->term_id);
 			} else {
@@ -860,4 +884,145 @@ function get_attachment_id_by_filename($subPath, $filename) {
     ]);
     
     return $query->posts ? $query->posts[0] : false;
+}
+
+/**
+ * One-time migration for Events Manager 7.1+ compatibility
+ *
+ * Updates all existing synced events to use:
+ * - event_type = "single" (changed from "event" in EM 7.1+)
+ * - post_status = "publish" (required for proper display in EM 7.x)
+ *
+ * This function is called automatically on plugin load if migration hasn't been run yet.
+ */
+function ctwpsync_migrate_to_em71() {
+    global $wpdb;
+    global $wpctsync_tablename;
+
+    // Check if migration has already been run
+    $migration_completed = get_option('ctwpsync_em71_migration_completed');
+    if ($migration_completed) {
+        logDebug("Events Manager 7.1+ migration already completed, skipping");
+        return;
+    }
+
+    logInfo("Starting Events Manager 7.1+ migration for existing events");
+
+    // Get all mapped events
+    $mapped_events = $wpdb->get_results("SELECT wp_id FROM {$wpctsync_tablename}");
+
+    if (!$mapped_events || count($mapped_events) == 0) {
+        logInfo("No existing events found to migrate");
+        update_option('ctwpsync_em71_migration_completed', true);
+        return;
+    }
+
+    $total_events = count($mapped_events);
+    $updated_count = 0;
+    $error_count = 0;
+
+    logInfo("Found {$total_events} events to migrate");
+
+    foreach ($mapped_events as $mapped_event) {
+        $wp_event_id = $mapped_event->wp_id;
+
+        try {
+            // Load the event
+            $event = em_get_event($wp_event_id);
+
+            if (!$event || !$event->ID) {
+                logDebug("Event {$wp_event_id} not found in WordPress, skipping");
+                continue;
+            }
+
+            // Update event_type to "single" for Events Manager 7.1+
+            $event->event_type = "single";
+
+            // Set RSVP to false (required for EM 5.8+)
+            $event->event_rsvp = false;
+
+            // Save the event
+            $save_result = $event->save();
+
+            if ($save_result) {
+                // Set post_status to 'publish' for Events Manager 7.x
+                wp_update_post(array(
+                    'ID' => $event->post_id,
+                    'post_status' => 'publish'
+                ));
+
+                $updated_count++;
+                logDebug("Successfully migrated event {$wp_event_id}");
+            } else {
+                $error_count++;
+                logError("Failed to save event {$wp_event_id} during migration");
+            }
+
+        } catch (Exception $e) {
+            $error_count++;
+            logError("Error migrating event {$wp_event_id}: " . $e->getMessage());
+        }
+    }
+
+    // Mark migration as completed
+    update_option('ctwpsync_em71_migration_completed', true);
+
+    logInfo("Events Manager 7.1+ migration completed: {$updated_count} events updated, {$error_count} errors");
+
+    return array(
+        'total' => $total_events,
+        'updated' => $updated_count,
+        'errors' => $error_count
+    );
+}
+
+/**
+ * Migrate existing events to Events Manager 7.2+ format
+ * Sets the eventarchetype field to "event" for all existing events
+ * This is required for events to be displayed in Events Manager 7.2+
+ */
+function ctwpsync_migrate_to_em72() {
+    global $wpdb;
+
+    // Check if migration has already been run (v2 uses correct field name with underscore)
+    $migration_completed = get_option('ctwpsync_em72_migration_completed_v2');
+    if ($migration_completed) {
+        logDebug("Events Manager 7.2+ migration already completed, skipping");
+        return;
+    }
+
+    logInfo("Starting Events Manager 7.2+ migration for existing events (event_archetype field)");
+
+    // Get the Events Manager events table name
+    $em_events_table = $wpdb->prefix . 'em_events';
+
+    // Check if the event_archetype column exists in the em_events table
+    $column_exists = $wpdb->get_results("SHOW COLUMNS FROM `{$em_events_table}` LIKE 'event_archetype'");
+
+    if (count($column_exists) == 0) {
+        logInfo("event_archetype column does not exist in em_events table, skipping migration");
+        update_option('ctwpsync_em72_migration_completed_v2', true);
+        return;
+    }
+
+    // Update all events where event_archetype is NULL to "event"
+    $result = $wpdb->query(
+        "UPDATE `{$em_events_table}`
+         SET `event_archetype` = 'event'
+         WHERE `event_archetype` IS NULL"
+    );
+
+    if ($result === false) {
+        logError("Failed to update event_archetype field during migration");
+        return;
+    }
+
+    // Mark migration as completed
+    update_option('ctwpsync_em72_migration_completed_v2', true);
+
+    logInfo("Events Manager 7.2+ migration completed: {$result} events updated");
+
+    return array(
+        'updated' => $result
+    );
 }

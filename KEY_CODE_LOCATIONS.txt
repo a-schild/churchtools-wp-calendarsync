@@ -1,0 +1,202 @@
+KEY CODE LOCATIONS AND SNIPPETS
+================================
+
+FILE: churchtools-wpcalendarsync.php
+====================================
+
+Plugin Setup & Hooks:
+  Line 28-29: Register admin menu and settings hooks
+  Line 114-121: register_activation_hook - Setup cron job on activation
+  Line 127-134: add_action('ctwpsync_hourly_event') - Hourly cron hook
+  Line 151-185: ctwpsync_initplugin() - Create mapping table
+
+Cron Job Setup:
+  Line 115-121: ctwpsync_activation()
+    wp_schedule_event(current_time('timestamp'), 'hourly', 'ctwpsync_hourly_event')
+    Runs: do_this_ctwpsync_hourly() every hour
+
+Settings:
+  Line 42-56: register_ctwpsync_settings() - Register configuration options
+  Line 79-108: save_ctwpsync_settings() - Save and validate settings
+
+
+FILE: churchtools-dosync.php (MAIN SYNC LOGIC)
+===============================================
+
+Main Execution:
+  Line 53-129: Main sync loop
+    - Sets 5 minute time limit
+    - Loads configuration
+    - Gets appointments from ChurchTools
+    - Calls processCalendarEntry() for each
+    - Calls cleanupOldEntries()
+
+Core Processing Function:
+  Line 140-471: processCalendarEntry($ctCalEntry, $calendars_categories_mapping, $resourcetype_for_categories)
+  
+  CRITICAL LINES:
+    155-215: Check for existing mapping and determine create vs update mode
+    175: em_get_event($result[0]->wp_id) - Load existing event
+    189/212: new EM_Event(false) - Create new event
+    219-223: Handle location via getCreateLocation()
+    225-226: Set event name and timezone
+    235-254: Set post content with links
+    256-313: Handle all-day events and date parsing
+    318-366: Handle timed events with timezone conversion and DST handling
+    369-386: Download and handle image
+    387: **$event->save() - CRITICAL: Persist event to database**
+    390-393: setEventImage() - Attach image after save
+    396-409: $wpdb->insert() - Insert mapping for new events
+    412-428: UPDATE query - Update mapping for existing events
+    431: updateEventCategories() - Assign categories
+
+Database Transactions:
+  Line 145: $wpdb->query('START TRANSACTION')
+  Line 463: $wpdb->query('COMMIT')
+  Line 468: $wpdb->query('ROLLBACK')
+
+Supporting Functions:
+
+  Line 479-523: getCreateLocation(Address $appointmentAddress)
+    - EM_Locations::get() - Get all locations
+    - new EM_Location() - Create location
+    - $newLocation->save() - Persist location
+
+  Line 533-582: updateEventCategories(...)
+    - get_terms() - Find category by name
+    - wp_insert_term() - Create category
+    - wp_set_post_terms() - Assign to event
+
+  Line 592-611: cleanupOldEntries($startDate, $processingStart)
+    - Deletes stale Events-Manager events
+    - Removes mapping entries
+
+  Line 625-679: setEventImage($fileURL, $fileName, $postID, $eventDate)
+    - wp_upload_bits() - Upload file
+    - wp_insert_attachment() - Create attachment post
+    - wp_generate_attachment_metadata() - Generate thumbnails
+    - set_post_thumbnail() - Attach to event
+
+  Line 726-816: uploadFromLocalFile($tmpFile, $title, $content, $alt, $postDate)
+    - media_handle_sideload() - Upload file to media library
+
+  Line 825-838: addFlyerLink($postContent, $wpFlyerId)
+    - Embeds flyer link in event description
+
+
+KEY EVENTS-MANAGER API CALLS
+=============================
+
+Creating Event:
+  Line 212: $event = new EM_Event(false);
+  Line 226: $event->event_name = $ctCalEntry->getCaption();
+  Line 250: $event->post_content = $infoAndLink;
+  Line 315-317: For all-day: event_start_date, event_end_date, event_all_day
+  Line 360-365: For timed: + event_start_time, event_end_time
+  Line 387: $saveResult = $event->save();
+
+Getting Event:
+  Line 175: $event = em_get_event($result[0]->wp_id);
+
+Setting Location:
+  Line 220: $locationID = getCreateLocation($ctCalEntry->getAddress());
+  Line 222: $event->location_id = $locationID;
+
+Setting Image:
+  Line 641: set_post_thumbnail($postID, $attachment_id);
+  Line 673: set_post_thumbnail($postID, $attachment_id);
+
+Setting Categories:
+  Line 572: $newTerm = wp_insert_term($desiredCategory, EM_TAXONOMY_CATEGORY);
+  Line 579: wp_set_post_terms($event->ID, $wpDesiredCategories, EM_TAXONOMY_CATEGORY);
+
+
+DATABASE OPERATIONS
+====================
+
+Custom Mapping Table:
+  Line 154-168: CREATE TABLE wp_ctwpsync_mapping
+    Columns: id, ct_id, ct_repeating, wp_id, ct_image_id, wp_image_id, 
+             ct_flyer_id, wp_flyer_id, last_seen, event_start, event_end
+
+Check for Existing:
+  Line 156-157: SELECT for repeating events
+  Line 159: SELECT for non-repeating events
+  Line 162: $result = $wpdb->get_results($sql)
+
+Insert Mapping:
+  Line 396-409: $wpdb->insert($wpctsync_tablename, array(...))
+
+Update Mapping:
+  Line 412-427: UPDATE query to set last_seen and file IDs
+
+Delete Mapping:
+  Line 185, 187, 204, 206: DELETE queries when event removed
+
+
+CHURCHTOOLS API INTEGRATION
+=============================
+
+Appointments Fetch:
+  Line 104-107: 
+    AppointmentRequest::forCalendars($calendars)
+      ->where('from', $fromDate)
+      ->where('to', $toDate)
+      ->get()
+
+Combined Appointment (Resources & Files):
+  Line 262: CombinedAppointmentRequest::forAppointment(...)->get()
+  Line 265: $ctEvent = $combinedAppointment->getEvent()
+  Line 272: $eventFiles = FileRequest::forEvent($eventId)->get()
+  Line 287: $fileResult = $ctFile->downloadToPath($tmpFlyer)
+
+ChurchTools Event Data Extracted:
+  Line 141: $isRepeating = $ctCalEntry->getRepeatId() != "0"
+  Line 148: $ctCalEntry->getIsInternal()
+  Line 149: $ctCalEntry->getCaption() - Title
+  Line 219: $ctCalEntry->getAddress() - Location
+  Line 229: $ctCalEntry->getLink() - Link
+  Line 235: $ctCalEntry->getInformation() - Description
+  Line 256: $ctCalEntry->getAllDay() - All-day flag
+  Line 259/322: $ctCalEntry->getStartDate() - Start datetime
+  Line 323: $ctCalEntry->getEndDate() - End datetime
+  Line 369: $ctCalEntry->getImage() - Image object
+
+
+WORDPRESS INTEGRATION
+======================
+
+User Context:
+  Line 43-51: Checks if user logged in
+  Line 129: wp_set_current_user($current_user) - Set user context
+
+Timezone:
+  Line 225: wp_timezone_string() - Get WP timezone
+
+Media:
+  Line 650: wp_upload_bits($fileName, null, file_get_contents($fileURL), $uploadPart)
+  Line 664: wp_insert_attachment($attachment, $upload_file['file'], $postID)
+  Line 670: wp_generate_attachment_metadata($attachment_id, $upload_file['file'])
+  Line 798: media_handle_sideload($args, 0, null, $post_data)
+
+Terms/Categories:
+  Line 565: get_terms($taxFilter)
+  Line 572: wp_insert_term($desiredCategory, EM_TAXONOMY_CATEGORY)
+  Line 579: wp_set_post_terms($event->ID, $wpDesiredCategories, EM_TAXONOMY_CATEGORY)
+
+
+CONFIGURATION & LOGGING
+========================
+
+Configuration Storage:
+  Line 102, 104: update_option() / add_option() for 'ctwpsync_options'
+  Line 32: get_option('ctwpsync_options')
+
+Logging:
+  Line 681-709: logDebug(), logInfo(), logError() functions
+  Line 684: Log file path: plugin_dir_path(__FILE__).'wpcalsync.log'
+
+Transients (Last sync info):
+  Line 118: set_transient('churchtools_wpcalendarsync_lastupdated', ...)
+  Line 120: set_transient('churchtools_wpcalendarsync_lastsyncduration', ...)
+

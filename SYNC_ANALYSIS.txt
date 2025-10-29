@@ -1,0 +1,208 @@
+# ChurchTools WordPress Calendar Sync - Plugin Architecture Analysis
+
+## OVERVIEW
+This WordPress plugin synchronizes calendar entries from ChurchTools to WordPress using the Events Manager plugin. It runs hourly via WordPress cron to fetch and sync events.
+
+## 1. MAIN SYNC SCRIPT FILES
+- churchtools-wpcalendarsync.php: Main plugin file (initialization, cron setup)
+- churchtools-dosync.php: Core synchronization logic (MAIN SCRIPT)
+
+## 2. KEY FUNCTION: processCalendarEntry()
+Location: churchtools-dosync.php (lines 140-471)
+Processes each ChurchTools appointment and creates/updates corresponding WordPress event
+
+### Step-by-Step Flow:
+
+A) Check Existing Mapping (lines 155-215)
+   - Queries ctwpsync_mapping table for existing ct_id
+   - If found: loads existing event via em_get_event($result[0]->wp_id)
+   - If not found: creates new EM_Event(false)
+   - Sets $addMode flag for INSERT vs UPDATE
+
+B) Create/Load Event Instance
+   NEW: $event = new EM_Event(false);
+   EXISTING: $event = em_get_event($result[0]->wp_id);
+
+C) Set Event Properties (lines 219-366)
+   $event->event_name = title
+   $event->post_content = description
+   $event->event_timezone = wp_timezone_string()
+   $event->location_id = getCreateLocation()
+   
+   For All-Day Events:
+   - $event->event_start_date = Y-m-d format
+   - $event->event_end_date = Y-m-d format
+   - $event->event_all_day = 1
+   
+   For Timed Events:
+   - $event->event_start_date = Y-m-d
+   - $event->event_end_date = Y-m-d
+   - $event->event_start_time = H:i:s
+   - $event->event_end_time = H:i:s
+   - $event->event_all_day = 0
+
+D) SAVE TO DATABASE (line 387)
+   $saveResult = $event->save();
+   *** This is the Events-Manager API call that persists event ***
+
+E) Attach Images (lines 390-393)
+   - Downloads image from ChurchTools
+   - Uploads via setEventImage()
+   - Attaches as featured image: set_post_thumbnail()
+
+F) Update Mapping Table (lines 394-429)
+   NEW EVENT - INSERT:
+   $wpdb->insert($wpctsync_tablename, array(
+     'ct_id' => $ctCalEntry->getId(),
+     'wp_id' => $event->event_id,
+     'ct_image_id' => $newCtImageID,
+     'ct_flyer_id' => $newCTFlyerId,
+     'wp_flyer_id' => $newWPFlyerId,
+     'last_seen' => date('Y-m-d H:i:s'),
+     'event_start' => $ctCalEntry->getStartDate(),
+     'event_end' => $ctCalEntry->getEndDate(),
+     'ct_repeating' => $isRepeating ? 1 : 0
+   ));
+   
+   EXISTING EVENT - UPDATE:
+   UPDATE ctwpsync_mapping SET last_seen='...' WHERE ct_id=X
+
+G) Update Categories (line 431)
+   updateEventCategories() -> wp_set_post_terms()
+
+## 3. EVENTS-MANAGER API CALLS
+
+Creating Event:
+  $event = new EM_Event(false);
+  $event->event_name = "Title";
+  $event->post_content = "Description";
+  $event->event_start_date = "2025-10-27";
+  $event->event_start_time = "14:30:00";
+  $event->event_all_day = 0;
+  $event->location_id = 123;
+  $saveResult = $event->save();
+
+Getting Event:
+  $event = em_get_event($wp_event_id);
+
+Location Management:
+  $emLocations = EM_Locations::get();
+  $newLocation = new EM_Location();
+  $newLocation->name = "Location";
+  $newLocation->location_street = "Street";
+  $newLocation->location_town = "City";
+  $newLocation->location_postcode = "12345";
+  $newLocation->location_country = "Country";
+  $newLocation->save();
+
+Setting Image:
+  set_post_thumbnail($postID, $attachment_id);
+
+Setting Categories:
+  wp_set_post_terms($event->ID, $categoryTermIds, EM_TAXONOMY_CATEGORY);
+
+Event Properties Mapped:
+  $event->event_id - Events-Manager ID
+  $event->event_type - "event"
+  $event->event_name - Title
+  $event->post_content - Description
+  $event->event_start_date - Y-m-d
+  $event->event_end_date - Y-m-d
+  $event->event_start_time - H:i:s
+  $event->event_end_time - H:i:s
+  $event->event_all_day - 0 or 1
+  $event->event_timezone - Timezone string
+  $event->location_id - Location reference
+  $event->ID - WordPress post ID
+
+## 4. DATABASE SAVING
+
+Mapping Table: wp_ctwpsync_mapping
+  - Stores CT appointment ID -> WordPress event ID mapping
+  - Tracks image and flyer file IDs
+  - Records last sync timestamp
+
+Event Storage (via Events-Manager):
+  - Events stored in wp_posts table (custom post type)
+  - Metadata in wp_postmeta
+  - Categories in wp_term_relationships
+  - Images/flyers in wp_attachments
+
+## 5. TRANSACTION SAFETY
+
+START TRANSACTION (line 145)
+try {
+  - All processing happens here
+  - Multiple saves/inserts/updates
+  COMMIT (line 463)
+} catch {
+  ROLLBACK (line 468)
+}
+
+Prevents partial saves and duplicate events on timeout.
+
+## 6. SUPPORTING FUNCTIONS
+
+getCreateLocation(Address) - Lines 479-523
+  - Finds or creates location in Events-Manager
+  - Returns location ID
+
+updateEventCategories() - Lines 533-582
+  - Maps calendar IDs to categories
+  - Maps resources to categories
+  - Creates missing categories
+  - Assigns via wp_set_post_terms()
+
+setEventImage() - Lines 625-679
+  - Downloads image from CT
+  - Uploads via wp_upload_bits()
+  - Creates attachment post via wp_insert_attachment()
+  - Generates metadata via wp_generate_attachment_metadata()
+  - Sets as featured image
+
+uploadFromLocalFile() - Lines 726-816
+  - Uploads files to media library
+  - Uses media_handle_sideload()
+  - Currently allows only PDF for flyers
+
+cleanupOldEntries() - Lines 592-611
+  - Deletes Events-Manager events no longer in ChurchTools
+  - Removes mapping entries
+  - Prevents stale event accumulation
+
+## 7. DATA FLOW
+
+Input:
+  ChurchTools API -> AppointmentRequest::forCalendars()
+  Settings -> ctwpsync_options
+  User -> Current logged-in user
+
+Processing:
+  foreach $ctCalEntry -> processCalendarEntry()
+  Check mapping table -> Determine create vs update
+  Build event data -> EM_Event properties
+  Save event -> $event->save()
+
+Output:
+  Events-Manager Events -> wp_posts table
+  Mapping entries -> ctwpsync_mapping table
+  Images/Flyers -> wp_attachments
+  Categories -> wp_term_relationships
+
+## 8. KEY CONFIGURATION
+
+Plugin Settings (admin page):
+  - ChurchTools URL
+  - API Token
+  - Calendar IDs to sync
+  - Category mappings
+  - Days in past/future to sync
+  - Resource type for category mapping
+
+## 9. CRON SCHEDULE
+
+Event: ctwpsync_hourly_event
+Frequency: Every hour
+Action: do_this_ctwpsync_hourly
+Calls: ctwpsync_includeChurchcalSync
+Includes: churchtools-dosync.php
