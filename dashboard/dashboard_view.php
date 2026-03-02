@@ -331,7 +331,7 @@ jQuery(document).ready(function($) {
 			html += '<tr>' +
 				'<td><input type="checkbox" class="calendar-checkbox" data-index="' + index + '" ' + checked + '></td>' +
 				'<td>' + escapeHtml(cal.name) +
-				'<input type="hidden" class="calendar-id" data-index="' + index + '" value="' + cal.id + '">' +
+				'<input type="hidden" class="calendar-id" data-index="' + index + '" value="' + escapeHtml(cal.id) + '">' +
 				'<input type="hidden" class="calendar-name" data-index="' + index + '" value="' + escapeHtml(cal.name) + '">' +
 				'</td>' +
 				'<td><input type="text" class="calendar-category" data-index="' + index + '" value="' + escapeHtml(category) + '" placeholder="Category name" style="width: 100%;"></td>' +

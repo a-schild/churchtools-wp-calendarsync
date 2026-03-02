@@ -261,10 +261,12 @@ function processCalendarEntry(
 				logDebug("Found link to insert ".$ctLink);
 				$count = 0;
 				//Tries to replace "#LINK:Link-Title:#" with a html link. $count is updated to check whether the call succeeded
-				$infoAndLink = preg_replace('/#LINK:(.*?):#/', '<a href="'.$ctLink.'" target="_blank">$1</a>', $ctInfo, 1, $count);
+				$infoAndLink = preg_replace_callback('/#LINK:(.*?):#/', function($matches) use ($ctLink) {
+					return '<a href="' . esc_url($ctLink) . '" target="_blank">' . esc_html($matches[1]) . '</a>';
+				}, $ctInfo, 1, $count);
 				if ($count == 0) {
 					//Did not succeed, simply append the link at the end of the text
-					$infoAndLink = $ctInfo . "<br>\n".'<a href="'.$ctLink.'" target="_blank">Link</a>';
+					$infoAndLink = $ctInfo . "<br>\n".'<a href="' . esc_url($ctLink) . '" target="_blank">Link</a>';
 					logDebug("Adding link at the bottom of the text ".$ctLink);
 				} else {
 					logDebug("Replaced text $count time(s) with link ".$ctLink);
@@ -323,7 +325,8 @@ function processCalendarEntry(
 											mkdir($tmpFlyer);
 										}
 										$fileResult= $ctFile->downloadToPath($tmpFlyer);
-										$tmpFlyerFile= $tmpFlyer. DIRECTORY_SEPARATOR . $ctFile->getName();
+										$safeFileName= sanitize_file_name(basename($ctFile->getName()));
+										$tmpFlyerFile= $tmpFlyer. DIRECTORY_SEPARATOR . $safeFileName;
 										logInfo("Downloaded to ".$fileResult." ".$tmpFlyerFile);
 										// TODO: Check if we already have this file in WP, otherwise upload it
 										// Then attach a link to the file to the event content
@@ -451,7 +454,7 @@ function processCalendarEntry(
 
 				if ( $imageURL != null && empty( $img_attr_name ) ) {
 					// image embedding is disabled, download the image
-					$attachmentID = downloadEventImage( $imageURL, $imageName, $event->ID, $sDate );
+					$attachmentID = downloadEventImage( $imageURL, $imageName, $event->ID, $sDate, $config->url );
 					logDebug("Attached image ".$imageName." from ".$imageURL." as attachement ".$attachmentID);
 				}
 				if ($addMode) {
@@ -747,9 +750,14 @@ function cleanupOldEntries(string $startDate, string $processingStart): void {
  * @param string $fileName Name of the file to download
  * @param int $postID WordPress post ID to attach to
  * @param \DateTime $eventDate Event date for organizing uploads
+ * @param string $ctBaseUrl Expected ChurchTools base URL for SSRF protection
  * @return int|null Attachment ID or null on failure
  */
-function downloadEventImage(string $fileURL, string $fileName, int $postID, \DateTime $eventDate): ?int {
+function downloadEventImage(string $fileURL, string $fileName, int $postID, \DateTime $eventDate, string $ctBaseUrl = ''): ?int {
+	if (!empty($ctBaseUrl) && !str_starts_with($fileURL, $ctBaseUrl)) {
+		logError("Refused to download image from untrusted URL: " . $fileURL);
+		return null;
+	}
 	$uploadPart= $eventDate->format('Y/m');
 	// Get upload dir
 	$upload_dir    = wp_upload_dir();
@@ -966,10 +974,12 @@ function uploadFromLocalFile(
 function addFlyerLink(string $postContent, int $wpFlyerId): string {
     $flyerLink= wp_get_attachment_url( $wpFlyerId );
     //Tries to replace "#FLYER:Link-Title:#" with a html link. $count is updated to check whether the call succeeded
-    $infoAndFlyer = preg_replace('/#FLYER:(.*?):#/', '<a href="'.$flyerLink.'" target="_blank">$1</a>', $postContent, 1, $count);
+    $infoAndFlyer = preg_replace_callback('/#FLYER:(.*?):#/', function($matches) use ($flyerLink) {
+        return '<a href="' . esc_url($flyerLink) . '" target="_blank">' . esc_html($matches[1]) . '</a>';
+    }, $postContent, 1, $count);
     if ($count == 0) {
         //Did not succeed, simply append the link at the end of the text
-        $infoAndFlyer = $postContent . "<br>\n".'<a href="'.$flyerLink.'" target="_blank">Download Flyer</a>';
+        $infoAndFlyer = $postContent . "<br>\n".'<a href="' . esc_url($flyerLink) . '" target="_blank">Download Flyer</a>';
         logDebug("Adding link at the bottom of the text ".$flyerLink);
     } else {
         logDebug("Replaced text $count time(s) with link ".$flyerLink);

@@ -1,5 +1,23 @@
 # churchtools-wp-calendarsync changelog
 
+## 2026-03-02
+- Release v1.3.1
+- **Bug fix: location fallback when `getMeetingAt()` is empty**
+  - Location matching and creation now falls back to street, then city, then "undefined" when the primary location name is empty
+  - Fixes events with incomplete address data causing a null/empty location name
+- **Security: XSS prevention in event link/flyer injection**
+  - `#LINK:text:#` and `#FLYER:text:#` marker text is now HTML-escaped before insertion into event content
+  - Link URLs are now passed through `esc_url()` in both the marker replacement and the fallback append case
+- **Security: SSRF protection for image downloads**
+  - Image downloads via `file_get_contents()` now validate that the URL starts with the configured ChurchTools base URL
+  - Prevents a compromised ChurchTools instance from making the WordPress server request internal network resources
+- **Security: Path traversal protection for flyer temp files**
+  - Flyer filenames from ChurchTools are now sanitized with `basename()` and `sanitize_file_name()` before being used in temp path construction
+- **Security: XSS prevention in calendar ID rendering**
+  - Calendar IDs from the ChurchTools API are now passed through `escapeHtml()` when rendered in the admin dashboard JavaScript
+- **Security: Log file protected from web access**
+  - Added `.htaccess` rule to deny direct HTTP access to `*.log` files in the plugin directory
+
 ## 2026-02-04
 - Release v1.3.0
 - **Background sync with "Sync Now" button**

@@ -1,0 +1,4 @@
+# Deny direct web access to log files
+<Files "*.log">
+    Require all denied
+</Files>
