@@ -1,6 +1,6 @@
 <?php
 /**
- * 
+ *
  *
  * @link              https://github.com/a-schild/churchtools-wp-calendarsync
  * @since             0.1.0
@@ -13,7 +13,7 @@
  * Version:           1.3.0
  * Author:            André Schild
  * Author URI:        https://github.com/a-schild/churchtools-wp-calendarsync/
- * License:           GPLv2 or later 
+ * License:           GPLv2 or later
  * License URI:       https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
  * Text Domain:       ctwpsync
  * Domain Path:       /languages
@@ -347,7 +347,7 @@ function ctwpsync_initplugin(): void {
             );";
     require_once(ABSPATH . '/wp-admin/includes/upgrade.php');
     dbDelta($sql);
-    
+
     $result = $wpdb->get_results("SHOW COLUMNS FROM `".$table_name."` LIKE 'ct_repeating'");
     $exists = count($result) > 0 ? TRUE : FALSE;
     if ($exists) {
@@ -403,13 +403,18 @@ add_action( 'plugins_loaded', 'ctwpsync_initplugin' );
  * @return string The image URL (possibly overridden)
  */
 function ctwpsync_override_event_image(string $em_image_url, $em_event): string {
+    // The filter is called for all Event Manger objects (e.g. also locations); only apply to events
+    if(!($em_event instanceof EM_Event)) {
+        return $em_image_url;
+    }
+
 	// Retrieve attribute name from options
 	$options = get_option('ctwpsync_options');
 	$attr_name = is_array($options) ? ($options['em_image_attr'] ?? '') : '';
 
 	// Embedding has to be enabled (attribute name set),
 	// then local images take precedence, only override URL if it isn't set anyway
-	if (!empty($attr_name) && empty($em_image_url) && array_key_exists($attr_name, $em_event->event_attributes)) {
+    if (!empty($attr_name) && empty($em_image_url) && is_array($em_event->event_attributes) && array_key_exists($attr_name, $em_event->event_attributes)) {
 		$em_image_url = $em_event->event_attributes[$attr_name];
 		$em_event->image_url = $em_image_url;
 	}
