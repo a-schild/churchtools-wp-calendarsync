@@ -567,7 +567,16 @@ function processCalendarEntry(
 function getCreateLocation(?Address $appointmentAddress): ?int {
      if ($appointmentAddress !== null) {
          // logDebug("CT Location address is: ".serialize($appointmentAddress));
-         $appointmentAddress->getMeetingAt(); // Ortsangabe (Zentrum Ipsach etc.)
+	 $meetingAt = $appointmentAddress->getMeetingAt(); // Ortsangabe (Zentrum Ipsach etc.)
+	 if (empty($meetingAt)) {
+		 if(!empty($appointmentAddress->getStreet()))
+			 $meetingAt = $appointmentAddress->getStreet();
+		 elseif(!empty($appointmentAddress->getCity()))
+			 $meetingAt = $appointmentAddress->getCity();
+		 else
+			 $meetingAt = "undefined";
+
+	 }
          $appointmentAddress->getAddition(); // Weitere Ortsangabe
          $appointmentAddress->getStreet(); // Strasse
          $appointmentAddress->getZip(); // PLZ
@@ -580,7 +589,7 @@ function getCreateLocation(?Address $appointmentAddress): ?int {
          $emLocations= EM_Locations::get();
          $matchedLocation= null;
          foreach ($emLocations as $key => $emLocation) {
-             if ($appointmentAddress->getMeetingAt() == $emLocation->name && 
+             if ($meetingAt == $emLocation->name && 
                  $appointmentAddress->getCity() == $emLocation->town && 
                  $appointmentAddress->getZip() == $emLocation->postcode &&
                  $appointmentAddress->getCountry() == $emLocation->location_country
@@ -590,13 +599,13 @@ function getCreateLocation(?Address $appointmentAddress): ?int {
              }
          }
          if ($matchedLocation != null) {
-            logDebug("Location found: ".$appointmentAddress->getMeetingAt()." ".$appointmentAddress->getZip()." ".$appointmentAddress->getCity()." ".$appointmentAddress->getCountry());
+            logDebug("Location found: ".$meetingAt." ".$appointmentAddress->getZip()." ".$appointmentAddress->getCity()." ".$appointmentAddress->getCountry());
             return $matchedLocation->id;
          } else {
-             logInfo("Creating new location for ".$appointmentAddress->getMeetingAt()." ".$appointmentAddress->getZip()." ".$appointmentAddress->getCity()." ".$appointmentAddress->getCountry());
+             logInfo("Creating new location for ".$meetingAt." ".$appointmentAddress->getZip()." ".$appointmentAddress->getCity()." ".$appointmentAddress->getCountry());
              // Create new location
              $newLocation= new EM_Location();
-             $newLocation->name= $appointmentAddress->getMeetingAt();
+             $newLocation->name= $meetingAt;
              $newLocation->location_street= $appointmentAddress->getStreet();
              $newLocation->location_town= $appointmentAddress->getCity();
              $newLocation->location_postcode= $appointmentAddress->getZip();
