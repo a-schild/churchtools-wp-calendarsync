@@ -18,6 +18,14 @@
 - **Security: Log file protected from web access**
   - Added `.htaccess` rule to deny direct HTTP access to `*.log` files in the plugin directory
 
+## 2026-03-04
+- Release v1.3.2
+- **Bug fix: image URL override filter now skips non-event objects**
+  - `ctwpsync_override_event_image` now checks `instanceof EM_Event` before applying logic
+  - Prevents errors when Events Manager calls the filter for locations or other objects
+- **Bug fix: guard `event_attributes` before `array_key_exists()`**
+  - Added `is_array()` check on `$em_event->event_attributes` to prevent fatal errors when the attribute is not an array
+
 ## 2026-02-04
 - Release v1.3.0
 - **Background sync with "Sync Now" button**

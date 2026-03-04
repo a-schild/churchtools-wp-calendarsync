@@ -24,9 +24,20 @@ composer update
 ## Releasing a New Version
 
 1. Update `CHANGELOG.md`
-2. Bump the version in `churchtools-wpcalendarsync.php` — update **both** line 13 (plugin header) and line 36 (`CTWPSYNC_VERSION` constant)
+2. Bump the version in `churchtools-wpcalendarsync.php` — update **both** the plugin header (`Version:` line) and the `CTWPSYNC_VERSION` constant (search with grep, line numbers shift over time)
 3. Commit and push, then create a git tag in the form `v1.x.y`
 4. GitHub Actions will build and publish the release ZIP automatically
+
+### Release History
+
+| Version | Date       | Highlights |
+|---------|------------|------------|
+| 1.3.2   | 2026-03-04 | Bug fix: image filter skips non-EM_Event objects; guard `event_attributes` before `array_key_exists()` |
+| 1.3.1   | 2026-03-02 | Bug fix: location fallback for empty `getMeetingAt()`; security fixes (XSS, SSRF, path traversal, log protection) |
+| 1.3.0   | 2026-02-04 | Background sync with "Sync Now" button; sync status display; 57-min interval; AJAX token fix; EM dependency checks |
+| 1.2.0   | 2025-12-06 | Option to deliver images directly from ChurchTools |
+| 1.1.0   | 2025-10-29 | Events Manager 7.2+ compatibility; PHP 8+ fixes; cron deduplication |
+| 1.0.x   | 2023–2025  | Initial releases: repeating events, image/flyer support, DST handling, tag support |
 
 ## Architecture
 
