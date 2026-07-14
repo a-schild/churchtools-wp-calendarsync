@@ -159,7 +159,7 @@ function processCalendarEntry(
 			global $wpctsync_tablename;
 			if ($isRepeating) {
 				$sql= $wpdb->prepare('SELECT * FROM `'.$wpctsync_tablename.'` WHERE `ct_id` = %d and ct_repeating=1 '
-					. 'and event_start=\'%s\' ;', array($ctCalEntry->getId(), date_format( date_create($ctCalEntry->getStartDate()), 'Y-m-d H:i:s' )));
+					. 'and event_start = %s ;', array($ctCalEntry->getId(), date_format( date_create($ctCalEntry->getStartDate()), 'Y-m-d H:i:s' )));
 			} else {
 				$sql= $wpdb->prepare('SELECT * FROM `'.$wpctsync_tablename.'` WHERE `ct_id` = %d ;', array($ctCalEntry->getId()));
 			}
@@ -246,7 +246,8 @@ function processCalendarEntry(
 				}
 			}
 			$event->event_timezone= wp_timezone_string(); // Fix it to the default WP default timezone
-			$event->event_name= $ctCalEntry->getCaption();
+			// Titles must not contain markup; the caption comes from ChurchTools (untrusted)
+			$event->event_name= sanitize_text_field($ctCalEntry->getCaption());
 
 			//Cache link and information
 			$ctLink = $ctCalEntry->getLink();
@@ -271,11 +272,15 @@ function processCalendarEntry(
 				} else {
 					logDebug("Replaced text $count time(s) with link ".$ctLink);
 				}
-				//Set text with link in WP event
-				$event->post_content = $infoAndLink;
+				//Set text with link in WP event.
+				// wp_kses_post() strips scripts/event handlers but keeps safe formatting
+				// (a, br, strong, img, ...); the information text comes from ChurchTools
+				// (untrusted) and is rendered as HTML by Events Manager, so it must be
+				// sanitized to prevent stored XSS on the public event page.
+				$event->post_content = wp_kses_post($infoAndLink);
 			} else {
-				//Link is empty, just use the text
-				$event->post_content = $ctInfo;
+				//Link is empty, just use the text (sanitized, see above)
+				$event->post_content = wp_kses_post($ctInfo);
 			}
 
 			if ($ctCalEntry->getAllDay() === "true") {
@@ -787,7 +792,23 @@ function downloadEventImage(string $fileURL, string $fileName, int $postID, \Dat
 		logError("Failed to download image from " . $fileURL);
 		return null;
 	}
-    $upload_file = wp_upload_bits( $fileName, null, $fileContent, $uploadPart);
+
+	// Defense in depth: only accept known raster image types, regardless of
+	// WordPress' upload filtering. The filename/extension comes from ChurchTools
+	// (untrusted), so validate both the extension and the actual file contents
+	// before writing anything into the uploads directory.
+	$allowedImageExtensions = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+	$extension = strtolower(pathinfo($sanFileName, PATHINFO_EXTENSION));
+	if (!in_array($extension, $allowedImageExtensions, true)) {
+		logError("Refused image with disallowed extension '{$extension}': " . $fileName);
+		return null;
+	}
+	if (@getimagesizefromstring($fileContent) === false) {
+		logError("Refused download: content is not a valid image: " . $fileURL);
+		return null;
+	}
+
+    $upload_file = wp_upload_bits( $sanFileName, null, $fileContent, $uploadPart);
     if ( ! $upload_file['error'] ) {
 	  logDebug("Result of fileupload: " . json_encode($upload_file));
       // if succesfull insert the new file into the media library (create a new attachment post type).

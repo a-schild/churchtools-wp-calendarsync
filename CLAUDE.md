@@ -32,6 +32,7 @@ composer update
 
 | Version | Date       | Highlights |
 |---------|------------|------------|
+| 1.3.4   | 2026-07-14 | Security: stored XSS prevention in event description/title (`wp_kses_post`/`sanitize_text_field`); image download restricted to real image types; SSRF hardening of admin AJAX URL params; fixed manually-quoted `%s` in repeating query; test scripts moved to `tests/` and excluded from build |
 | 1.3.3   | 2026-07-14 | Bug fix: cron cleanup used `wp_unschedule_hook()` so events scheduled with args are actually removed; user ID (not `WP_User` object) in event args; self-healing migration for duplicate/legacy events (PR #24) |
 | 1.3.2   | 2026-03-04 | Bug fix: image filter skips non-EM_Event objects; guard `event_attributes` before `array_key_exists()` |
 | 1.3.1   | 2026-03-02 | Bug fix: location fallback for empty `getMeetingAt()`; security fixes (XSS, SSRF, path traversal, log protection) |

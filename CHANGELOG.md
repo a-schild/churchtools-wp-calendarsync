@@ -1,6 +1,18 @@
 # churchtools-wp-calendarsync changelog
 
 ## 2026-07-14
+- Release v1.3.4
+- **Security: stored XSS prevention in event description and title**
+  - The ChurchTools appointment "information" field is now passed through `wp_kses_post()` before being stored as the event `post_content`, which Events Manager renders as HTML. This prevents a ChurchTools user (who may not be a WordPress admin) from injecting `<script>`/event-handler markup that would execute on the public event page
+  - The event title (`event_name`) from the CT caption is now sanitized with `sanitize_text_field()`
+- **Security: image download restricted to real image types**
+  - `downloadEventImage()` now validates both the file extension (jpg/jpeg/png/gif/webp) and the actual file contents (`getimagesizefromstring()`) before writing to the uploads directory, mirroring the PDF-only check already used for flyers. Defense in depth against writing unexpected/executable files using a ChurchTools-supplied filename
+- **Security: SSRF hardening of admin AJAX endpoints**
+  - The connection-test, calendar-fetch and resource-type-fetch AJAX handlers now validate that the supplied URL is a well-formed `http(s)` URL (rejecting `file://`, `gopher://`, etc.) before making a server-side request. These endpoints already required `manage_options`; this is defense in depth
+- **Bug fix / hardening: corrected a manually-quoted `%s` placeholder** in the repeating-event lookup query (`event_start = %s`) that tripped a `_doing_it_wrong` notice on modern WordPress
+- **Build: development test scripts moved to `tests/` and excluded from the release ZIP** (also excludes `.idea/`, `.gitignore`, and `*.log`)
+
+## 2026-07-14
 - Release v1.3.3
 - **Bug fix: cron cleanup never removed events scheduled with args (unbounded event duplication → OOM)**
   - Thanks to [@lichtteil](https://github.com/lichtteil) (Mario) for the diagnosis and fix ([#24](https://github.com/a-schild/churchtools-wp-calendarsync/pull/24))

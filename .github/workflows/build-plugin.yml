@@ -34,7 +34,10 @@ jobs:
           mkdir -p build/$PLUGIN_FOLDER
 
           # Copy all files except .git and build directory into the plugin folder
-          rsync -av --exclude='.git' --exclude='build' --exclude='.github' . build/$PLUGIN_FOLDER/
+          # Development-only files (tests, IDE config, logs) are excluded from the release
+          rsync -av --exclude='.git' --exclude='build' --exclude='.github' \
+                --exclude='tests' --exclude='.idea' --exclude='.gitignore' \
+                --exclude='*.log' . build/$PLUGIN_FOLDER/
 
           # Create zip from the build directory (so the plugin folder is at the root of the zip)
           cd build

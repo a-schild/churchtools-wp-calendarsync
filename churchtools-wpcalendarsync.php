@@ -10,7 +10,7 @@
  * Plugin Name:       Churchtools WP Calendarsync
  * Plugin URI:        https://github.com/a-schild/churchtools-wp-calendarsync
  * Description:       Churchtools wordpress calendar sync to events manager, requires "Events Manager" plugin. The sync is scheduled every hour to update WP events from churchtool.
- * Version:           1.3.3
+ * Version:           1.3.4
  * Author:            André Schild
  * Author URI:        https://github.com/a-schild/churchtools-wp-calendarsync/
  * License:           GPLv2 or later
@@ -90,7 +90,7 @@ function ctwpsync_add_settings_link(array $links): array {
  * Start at version 1.0.0 and use SemVer - https://semver.org
  * Rename this for your plugin and update it as you release new versions.
  */
-define( 'CTWPSYNC_VERSION', '1.3.3' );
+define( 'CTWPSYNC_VERSION', '1.3.4' );
 
 function ctwpsync_setup_menu(): void {
 	add_options_page('ChurchTools Calendar Importer', 'ChurchTools Calsync', 'manage_options', 'churchtools-wpcalendarsync', 'ctwpsync_dashboard');
@@ -434,6 +434,25 @@ function ctwpsync_override_event_image(string $em_image_url, $em_event): string 
 add_filter( 'em_object_get_image_url', 'ctwpsync_override_event_image', 10, 2 );
 
 /**
+ * Validate that a user-supplied URL is a well-formed http(s) URL.
+ *
+ * Used to harden the admin AJAX endpoints that make server-side requests to the
+ * provided ChurchTools URL. These endpoints are already restricted to users with
+ * manage_options, so this is defense in depth against SSRF via unexpected schemes
+ * (file://, gopher://, etc.) or malformed input.
+ *
+ * @param string $url
+ * @return bool
+ */
+function ctwpsync_is_valid_remote_url(string $url): bool {
+	if (empty($url) || !filter_var($url, FILTER_VALIDATE_URL)) {
+		return false;
+	}
+	$scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
+	return in_array($scheme, ['http', 'https'], true);
+}
+
+/**
  * Register AJAX action for connection validation
  */
 add_action('wp_ajax_ctwpsync_validate_connection', 'ctwpsync_validate_connection_callback');
@@ -469,6 +488,11 @@ function ctwpsync_validate_connection_callback(): void {
 	if (empty($url) || empty($token)) {
 		error_log('[ChurchTools Sync] Connection test failed: URL or API token missing');
 		wp_send_json_error('URL and API token are required');
+	}
+
+	if (!ctwpsync_is_valid_remote_url($url)) {
+		error_log('[ChurchTools Sync] Connection test failed: Invalid URL format');
+		wp_send_json_error('Invalid URL format (must be a http(s) URL)');
 	}
 
 	error_log('[ChurchTools Sync] Testing connection to: ' . $url);
@@ -542,6 +566,11 @@ function ctwpsync_get_calendars_callback(): void {
 		wp_send_json_error('URL and API token are required');
 	}
 
+	if (!ctwpsync_is_valid_remote_url($url)) {
+		error_log('[ChurchTools Sync] Calendar fetch failed: Invalid URL format');
+		wp_send_json_error('Invalid URL format (must be a http(s) URL)');
+	}
+
 	error_log('[ChurchTools Sync] Fetching calendars from: ' . $url);
 
 	// Load autoloader if needed
@@ -611,6 +640,11 @@ function ctwpsync_get_resource_types_callback(): void {
 	if (empty($url) || empty($token)) {
 		error_log('[ChurchTools Sync] Resource types fetch failed: URL or API token missing');
 		wp_send_json_error('URL and API token are required');
+	}
+
+	if (!ctwpsync_is_valid_remote_url($url)) {
+		error_log('[ChurchTools Sync] Resource types fetch failed: Invalid URL format');
+		wp_send_json_error('Invalid URL format (must be a http(s) URL)');
 	}
 
 	error_log('[ChurchTools Sync] Fetching resource types from: ' . $url);
