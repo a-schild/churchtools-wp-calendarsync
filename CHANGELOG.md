@@ -1,6 +1,14 @@
 # churchtools-wp-calendarsync changelog
 
 ## 2026-07-14
+- Release v1.3.5
+- **Security: updated vulnerable Guzzle HTTP dependencies** (resolves 5 Dependabot advisories affecting the release ZIP, which installs dependencies from `composer.lock` at build time)
+  - `guzzlehttp/guzzle` `7.10.0` → `7.14.1` — fixes "Dot-Only Cookie Domains Match All Hosts" and "Silent HTTPS-Proxy Downgrade to Cleartext"
+  - `guzzlehttp/psr7` `2.8.0` → `2.12.5` — fixes CRLF injection in HTTP start-line serialization, CRLF injection via URI host component, and host confusion via authority reinterpretation
+  - `guzzlehttp/promises` `2.3.0` → `2.5.1` (required for guzzle ≥ 7.12)
+  - `composer audit` now reports no advisories
+
+## 2026-07-14
 - Release v1.3.4
 - **Security: stored XSS prevention in event description and title**
   - The ChurchTools appointment "information" field is now passed through `wp_kses_post()` before being stored as the event `post_content`, which Events Manager renders as HTML. This prevents a ChurchTools user (who may not be a WordPress admin) from injecting `<script>`/event-handler markup that would execute on the public event page

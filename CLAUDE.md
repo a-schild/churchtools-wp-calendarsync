@@ -32,6 +32,7 @@ composer update
 
 | Version | Date       | Highlights |
 |---------|------------|------------|
+| 1.3.5   | 2026-07-14 | Security (dependencies): updated Guzzle stack to clear 5 Dependabot advisories — `guzzlehttp/guzzle` 7.10.0→7.14.1, `guzzlehttp/psr7` 2.8.0→2.12.5, `guzzlehttp/promises` 2.3.0→2.5.1; release ZIP installs deps from `composer.lock` at build time so the lockfile bump is the fix |
 | 1.3.4   | 2026-07-14 | Security: stored XSS prevention in event description/title (`wp_kses_post`/`sanitize_text_field`); image download restricted to real image types; SSRF hardening of admin AJAX URL params; logs moved to hardened `uploads/ctwpsync-logs/` with unguessable name + rotation + one-time migration (`CTWPSYNC_DEBUG` gates library/debug logging); fixed manually-quoted `%s` in repeating query; test scripts moved to `tests/` and excluded from build |
 | 1.3.3   | 2026-07-14 | Bug fix: cron cleanup used `wp_unschedule_hook()` so events scheduled with args are actually removed; user ID (not `WP_User` object) in event args; self-healing migration for duplicate/legacy events (PR #24) |
 | 1.3.2   | 2026-03-04 | Bug fix: image filter skips non-EM_Event objects; guard `event_attributes` before `array_key_exists()` |
