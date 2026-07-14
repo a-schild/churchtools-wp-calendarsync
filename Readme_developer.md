@@ -5,8 +5,9 @@
 To release a new build do the following steps
 
 - Update the Changelog.md
-- Increase the version in the churchtools-wpcalendarsync.php file
-  in line 13 and 36, for example to 1.0.9
+- Increase the version in the churchtools-wpcalendarsync.php file in two
+  places: the `Version:` plugin header and the `CTWPSYNC_VERSION` constant
+  (search for them, line numbers shift over time), for example to 1.0.9
 - Create a tag in the form v1.0.9
 - Commit the changes and push the tags
   An automatic release and build will be done

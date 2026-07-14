@@ -1,6 +1,11 @@
 # churchtools-wp-calendarsync changelog
 
 ## 2026-07-14
+- Release v1.3.6
+- **Metadata: corrected the minimum PHP version in `composer.json`** — the constraint was `^8.1`, which would allow installation on PHP 8.1 where the plugin's `readonly` classes (`SyncLogger`, `SyncConfig`) are a fatal parse error. Now `^8.2`, matching the `Requires PHP: 8.2` plugin header
+- **Metadata: bumped `Tested up to` from `6.3.1` to `7.0.1`** to reflect current WordPress compatibility
+
+## 2026-07-14
 - Release v1.3.5
 - **Security: updated vulnerable Guzzle HTTP dependencies** (resolves 5 Dependabot advisories affecting the release ZIP, which installs dependencies from `composer.lock` at build time)
   - `guzzlehttp/guzzle` `7.10.0` → `7.14.1` — fixes "Dot-Only Cookie Domains Match All Hosts" and "Silent HTTPS-Proxy Downgrade to Cleartext"

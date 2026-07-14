@@ -1,6 +1,28 @@
 # Pending Improvements for ChurchTools WP Calendar Sync
 
-This file contains identified issues and improvements from code review that should be addressed in future updates.
+This file contains identified issues and improvements from code review that
+should be addressed in future updates.
+
+> Items reference functions by name rather than fixed line numbers, since line
+> numbers shift as the code changes. See `CHANGELOG.md` for the full release
+> history.
+
+## Completed (2026-07-14)
+- [x] Security hardening (v1.3.1–1.3.4) - stored XSS prevention in event
+  description/title (`wp_kses_post` / `sanitize_text_field`), image download
+  restricted to real image types, SSRF hardening of admin AJAX URL params,
+  logs moved to a hardened `uploads/ctwpsync-logs/` dir with unguessable name,
+  `CTWPSYNC_DEBUG`-gated debug/library logging
+- [x] Log rotation - log file rotates at 5 MB, keeping one previous generation
+- [x] Dependency CVEs (v1.3.5) - updated Guzzle stack (guzzle 7.14.1,
+  psr7 2.12.5, promises 2.5.1); `composer audit` reports no advisories
+- [x] Metadata (v1.3.6, pending release) - `composer.json` PHP constraint
+  `^8.1` → `^8.2` to match the plugin header; `Tested up to` 6.3.1 → 7.0.1
+- [x] Cron event duplication fix (v1.3.3) - `wp_unschedule_hook()` removes
+  events scheduled with args; user ID instead of `WP_User` object in event
+  args; self-healing migration for legacy/duplicate events
+- [x] Build wordpress package via github actions
+- [x] Settings link from the plugins list (`plugin_action_links`)
 
 ## Completed (2026-02-04)
 - [x] AJAX with saved token - Fixed Validate Connection, Load Calendars, Load Resource Types buttons to work with saved API token
@@ -26,11 +48,11 @@ This file contains identified issues and improvements from code review that shou
 
 ## Medium Priority
 
-### 2. Refactor Large Function
-**File:** `churchtools-dosync.php`
-**Lines:** 124-514 (`processCalendarEntry` function)
+### Refactor Large Function
+**File:** `churchtools-dosync.php` — `processCalendarEntry()`
 
-**Issue:** Function has ~390 lines handling multiple responsibilities
+**Issue:** The function handles many responsibilities (content, location,
+attachments, categories) in one large block.
 
 **Recommendation:** Break into smaller functions:
 - `processEventContent()`
@@ -38,41 +60,29 @@ This file contains identified issues and improvements from code review that shou
 - `processEventAttachments()`
 - `processEventCategories()`
 
-### 3. Performance: Location Lookup
-**File:** `churchtools-dosync.php`
-**Lines:** 535-550
+### Performance: Location Lookup
+**File:** `churchtools-dosync.php` — `getCreateLocation()`
 
-**Issue:** Loads ALL locations and loops through them (O(n) for every event)
+**Issue:** Loads ALL Events Manager locations and loops through them (O(n) for
+every event).
 
-**Recommendation:** Use database query with proper parameters or implement caching
+**Recommendation:** Use a database query with proper parameters or implement
+caching.
 
-### 4. Performance: N+1 Query in Category Sync
-**File:** `churchtools-dosync.php`
-**Lines:** 636-659
+### Performance: N+1 Query in Category Sync
+**File:** `churchtools-dosync.php` — `updateEventCategories()`
 
-**Issue:** Multiple `get_terms()` calls per calendar entry
+**Issue:** `get_terms()` is called once per desired category, per calendar
+entry.
 
-**Recommendation:** Batch fetch categories at start of sync
-
-### 5. Hardcoded German String
-**File:** `churchtools-dosync.php`
-**Line:** 808
-
-**Issue:**
-```php
-$invalidRightsHeader = "Keine ausreichende Berechtigung";
-```
-
-**Recommendation:**
-```php
-$invalidRightsHeader = __("Insufficient permissions", "ctwpsync");
-```
+**Recommendation:** Batch fetch categories at the start of the sync and match
+against the cached list.
 
 ---
 
 ## Low Priority
 
-### 8. Code Style Consistency
+### Code Style Consistency
 **File:** `churchtools-dosync.php`
 
 **Issues:**
@@ -80,15 +90,19 @@ $invalidRightsHeader = __("Insufficient permissions", "ctwpsync");
 - Inconsistent variable naming (camelCase vs snake_case)
 - Inconsistent brace placement
 
-### 9. Documentation
+### Documentation
 **Files:** Multiple
 
-**Issue:** Some functions lack proper PHPDoc blocks
+**Issue:** Some functions lack proper PHPDoc blocks.
 
 ---
 
 ## Notes
 
-- These improvements were identified during a security-focused code review
-- Critical security issues have been addressed in commit `9b9bc25`
-- Priority should be given to error handling improvements before the next release
+- These improvements were identified during a security-focused code review.
+- Critical security issues have been addressed; see `CHANGELOG.md` for the full
+  history.
+- A previously-listed "Hardcoded German String" item (`"Keine ausreichende
+  Berechtigung"`) was removed: that string is matched against ChurchTools' own
+  response body when file rights are missing, not a UI label — wrapping it in
+  `__()` would translate it and break the check.
