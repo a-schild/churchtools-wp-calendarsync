@@ -215,10 +215,11 @@ function ctwpsync_activation(): void {
 		);
 	}
 
-	// Clear ALL existing scheduled events for this hook first to prevent duplicates
-	// This is necessary because wp_next_scheduled() doesn't check arguments,
-	// so multiple events with different args can be scheduled
-	wp_clear_scheduled_hook('ctwpsync_hourly_event');
+	// Clear ALL existing scheduled events for this hook first to prevent duplicates.
+	// wp_unschedule_hook() removes events regardless of their args;
+	// wp_clear_scheduled_hook() without args only matches events scheduled with no args
+	// and silently leaves events that carry args behind.
+	wp_unschedule_hook('ctwpsync_hourly_event');
 
 	// Mark that we need to schedule the cron event
 	// The actual scheduling happens in ctwpsync_initplugin() where the filter is guaranteed to be active
@@ -232,7 +233,10 @@ function ctwpsync_activation(): void {
  */
 add_action('ctwpsync_hourly_event', 'do_this_ctwpsync_hourly', 10, 2);
 function do_this_ctwpsync_hourly(bool $is_user_logged_in, $current_user): void {
-	wp_set_current_user($current_user);
+	// Events are scheduled with a plain user ID; events created by older
+	// plugin versions may still carry a full WP_User object as arg
+	$user_id = $current_user instanceof WP_User ? (int) $current_user->ID : (int) $current_user;
+	wp_set_current_user($user_id);
 	do_action('ctwpsync_includeChurchcalSync');
 	if (function_exists('ctwpsync_getUpdatedCalendarEvents')) {
 		$result = ctwpsync_getUpdatedCalendarEvents();
@@ -249,7 +253,8 @@ function ctwpsync_includeChurchcalSync(): void {
  */
 register_deactivation_hook(__FILE__, 'ctwpsync_deactivation');
 function ctwpsync_deactivation(): void {
-	wp_clear_scheduled_hook('ctwpsync_hourly_event');
+	// wp_unschedule_hook() clears events regardless of args (see ctwpsync_activation)
+	wp_unschedule_hook('ctwpsync_hourly_event');
 }
 
 /**
@@ -266,11 +271,11 @@ function ctwpsync_initplugin(): void {
     if (get_option('ctwpsync_needs_cron_schedule')) {
         // Try to acquire lock (delete returns true if option existed)
         if (delete_option('ctwpsync_needs_cron_schedule')) {
-            // Clear any existing events first
-            wp_clear_scheduled_hook($hook_name);
+            // Clear any existing events first, regardless of their args
+            wp_unschedule_hook($hook_name);
 
             // Schedule the cron event now that filters are active
-            $args = [is_user_logged_in(), wp_get_current_user()];
+            $args = [is_user_logged_in(), get_current_user_id()];
             wp_schedule_event(time(), 'every_57_minutes', $hook_name, $args);
             $cron_scheduled_this_request = true;
         }
@@ -299,33 +304,37 @@ function ctwpsync_initplugin(): void {
             }
         }
 
-        // Migrate from hourly schedule to every_57_minutes schedule
-        $needs_migration = false;
+        // Reschedule if any event uses an outdated schedule (pre-1.1.0 'hourly'),
+        // still carries a WP_User object instead of a user ID as arg (older versions),
+        // or duplicates exist
+        $needs_reschedule = count($scheduled_events) > 1;
         foreach ($scheduled_events as $event) {
-            if ($event['schedule'] === 'hourly') {
-                $needs_migration = true;
+            if ($event['schedule'] !== 'every_57_minutes' || !isset($event['args'][1]) || !is_int($event['args'][1])) {
+                $needs_reschedule = true;
                 break;
             }
         }
 
-        if ($needs_migration) {
-            // Clear all and reschedule with new interval
-            wp_clear_scheduled_hook($hook_name);
-            $args = [is_user_logged_in(), wp_get_current_user()];
-            wp_schedule_event(time(), 'every_57_minutes', $hook_name, $args);
-        } else if (count($scheduled_events) > 1) {
-            // Clean up duplicate cron events - keep only the earliest one
-            usort($scheduled_events, function($a, $b) {
-                return $a['timestamp'] - $b['timestamp'];
-            });
-
-            // Remove all except the first (earliest) one
-            for ($i = 1; $i < count($scheduled_events); $i++) {
-                wp_unschedule_event($scheduled_events[$i]['timestamp'], $hook_name, $scheduled_events[$i]['args']);
+        if ($needs_reschedule) {
+            // Preserve the sync user from existing events when the current
+            // request is anonymous (frontend/cron), so the sync keeps its owner
+            $user_id = get_current_user_id();
+            foreach ($scheduled_events as $event) {
+                if ($user_id > 0) {
+                    break;
+                }
+                $arg = isset($event['args'][1]) ? $event['args'][1] : 0;
+                $user_id = $arg instanceof WP_User ? (int) $arg->ID : (int) $arg;
             }
+
+            // wp_unschedule_hook() removes all events for the hook regardless of
+            // args; wp_clear_scheduled_hook() without args would leave every
+            // event that was scheduled with args behind
+            wp_unschedule_hook($hook_name);
+            wp_schedule_event(time(), 'every_57_minutes', $hook_name, [$user_id > 0, $user_id]);
         } else if (empty($scheduled_events)) {
             // No cron event exists - schedule one
-            $args = [is_user_logged_in(), wp_get_current_user()];
+            $args = [is_user_logged_in(), get_current_user_id()];
             wp_schedule_event(time(), 'every_57_minutes', $hook_name, $args);
         }
     }
