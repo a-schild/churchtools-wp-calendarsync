@@ -26,11 +26,13 @@ readonly class SyncLogger {
      * @param string $logFile Path to the log file
      * @param bool $debugEnabled Whether debug logging is enabled
      * @param bool $infoEnabled Whether info logging is enabled
+     * @param int $maxBytes Rotate the log once it reaches this size (0 disables rotation)
      */
     public function __construct(
         private string $logFile,
         private bool $debugEnabled = false,
         private bool $infoEnabled = true,
+        private int $maxBytes = 5242880, // 5 MB
     ) {}
 
     /**
@@ -48,7 +50,25 @@ readonly class SyncLogger {
             return;
         }
 
+        $this->rotateIfNeeded();
         error_log("{$level->value}: {$message}\n", 3, $this->logFile);
+    }
+
+    /**
+     * Rotate the log file if it has grown past the configured size limit.
+     *
+     * Keeps a single previous generation ({logFile}.1) and starts a fresh log,
+     * preventing unbounded growth of the log file over time.
+     */
+    private function rotateIfNeeded(): void {
+        if ($this->maxBytes <= 0) {
+            return;
+        }
+        $size = @filesize($this->logFile);
+        if ($size !== false && $size >= $this->maxBytes) {
+            // Overwrite any existing previous generation with the current file
+            @rename($this->logFile, $this->logFile . '.1');
+        }
     }
 
     /**

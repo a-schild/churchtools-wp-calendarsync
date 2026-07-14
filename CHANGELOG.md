@@ -9,6 +9,12 @@
   - `downloadEventImage()` now validates both the file extension (jpg/jpeg/png/gif/webp) and the actual file contents (`getimagesizefromstring()`) before writing to the uploads directory, mirroring the PDF-only check already used for flyers. Defense in depth against writing unexpected/executable files using a ChurchTools-supplied filename
 - **Security: SSRF hardening of admin AJAX endpoints**
   - The connection-test, calendar-fetch and resource-type-fetch AJAX handlers now validate that the supplied URL is a well-formed `http(s)` URL (rejecting `file://`, `gopher://`, etc.) before making a server-side request. These endpoints already required `manage_options`; this is defense in depth
+- **Security: log files moved out of the web-accessible directory**
+  - Logs now live in a hardened `wp-content/uploads/ctwpsync-logs/` folder (guarded by `index.php` + `.htaccess` + `web.config`) with an unguessable, per-site filename, so they can no longer be fetched by URL — including on nginx/IIS, where the plugin's `.htaccess` rule does not apply
+  - The churchtools-api library file log is now only enabled when the `CTWPSYNC_DEBUG` constant is set to true (it wrote fixed, non-relocatable `*.log` files into the vendor directory); the plugin's own logger is used otherwise
+  - Debug-level logging of the plugin logger is likewise gated behind `CTWPSYNC_DEBUG`
+  - The log file now rotates once it reaches 5 MB (keeps one previous generation) to prevent unbounded growth
+  - One-time migration moves any pre-existing `wpcalsync.log` and vendor `churchtools-api*.log` files into the new protected location
 - **Bug fix / hardening: corrected a manually-quoted `%s` placeholder** in the repeating-event lookup query (`event_start = %s`) that tripped a `_doing_it_wrong` notice on modern WordPress
 - **Build: development test scripts moved to `tests/` and excluded from the release ZIP** (also excludes `.idea/`, `.gitignore`, and `*.log`)
 

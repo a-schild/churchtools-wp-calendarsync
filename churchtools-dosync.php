@@ -13,13 +13,24 @@ use CTApi\Models\Calendars\CombinedAppointment\CombinedAppointmentRequest;
 use CTApi\Models\Calendars\CombinedAppointment\CombinedAppointment;
 use CTApi\Models\Common\File\FileRequest;
 
-CTLog::enableFileLog(); // enable logfile
+// The churchtools-api library writes to fixed *.log paths inside its own
+// (web-accessible) vendor directory and offers no way to relocate them, so only
+// enable it when explicitly debugging. The plugin has its own logger below.
+$ctwpsync_debug = defined('CTWPSYNC_DEBUG') && CTWPSYNC_DEBUG;
+if ($ctwpsync_debug) {
+    CTLog::enableFileLog(); // enable library logfile (debug only)
+}
 
-// Initialize logger (PHP 8.2 readonly class)
+// Initialize logger (PHP 8.2 readonly class).
+// The log file lives in a hardened uploads subdirectory with an unguessable
+// name; fall back to the plugin dir only if the helper is unavailable.
+$ctwpsync_logfile = function_exists('ctwpsync_log_file')
+    ? ctwpsync_log_file()
+    : plugin_dir_path(__FILE__) . 'wpcalsync.log';
 global $ctwpsync_logger;
 $ctwpsync_logger = new SyncLogger(
-    logFile: plugin_dir_path(__FILE__) . 'wpcalsync.log',
-    debugEnabled: false,
+    logFile: $ctwpsync_logfile,
+    debugEnabled: $ctwpsync_debug,
     infoEnabled: true
 );
 

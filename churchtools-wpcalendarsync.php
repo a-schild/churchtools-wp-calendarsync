@@ -200,6 +200,110 @@ function ctwpsync_get_next_scheduled(string $hook_name): int|false {
 }
 
 /**
+ * Return the directory used for plugin log files.
+ *
+ * Logs live under wp-content/uploads (not in the plugin directory, so they
+ * survive plugin updates) inside a dedicated folder that is hardened against
+ * direct web access. The directory is created on demand.
+ *
+ * @return string Absolute path to the log directory (no trailing slash)
+ */
+function ctwpsync_log_dir(): string {
+	$upload = wp_upload_dir();
+	$dir = trailingslashit($upload['basedir']) . 'ctwpsync-logs';
+	if (!is_dir($dir)) {
+		wp_mkdir_p($dir);
+	}
+	ctwpsync_protect_dir($dir);
+	return $dir;
+}
+
+/**
+ * Drop guard files into a directory to block direct web access and listing.
+ *
+ * Belt and suspenders across server types: index.php (blocks directory
+ * listing), .htaccess (Apache) and web.config (IIS). Servers that honour none
+ * of these (e.g. nginx) are covered by the unguessable log filename instead.
+ *
+ * @param string $dir Directory to protect
+ */
+function ctwpsync_protect_dir(string $dir): void {
+	$guards = [
+		'index.php'  => "<?php\n// Silence is golden.\n",
+		'.htaccess'  => "Require all denied\n",
+		'web.config' => "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+			. "<configuration>\n  <system.webServer>\n    <authorization>\n"
+			. "      <deny users=\"*\" />\n    </authorization>\n"
+			. "  </system.webServer>\n</configuration>\n",
+	];
+	foreach ($guards as $file => $content) {
+		$path = $dir . DIRECTORY_SEPARATOR . $file;
+		if (!file_exists($path)) {
+			@file_put_contents($path, $content);
+		}
+	}
+}
+
+/**
+ * Return the absolute path to the plugin log file.
+ *
+ * The filename carries an unguessable, per-site hash so that the log cannot be
+ * fetched by URL even on servers that ignore .htaccess/web.config (nginx).
+ *
+ * @return string Absolute path to the log file
+ */
+function ctwpsync_log_file(): string {
+	$hash = substr(wp_hash('ctwpsync-log-file'), 0, 16);
+	return ctwpsync_log_dir() . DIRECTORY_SEPARATOR . "wpcalsync-{$hash}.log";
+}
+
+/**
+ * One-time migration: move pre-1.3.4 log files out of the web-accessible
+ * plugin/vendor directories into the protected uploads log directory.
+ *
+ * Runs once (guarded by an option flag). If a destination file already exists,
+ * the old content is appended and the source removed.
+ */
+function ctwpsync_migrate_logs(): void {
+	if (get_option('ctwpsync_logs_migrated')) {
+		return;
+	}
+
+	$newDir = ctwpsync_log_dir(); // ensures dir + guard files exist
+	$moves = [
+		// Old plugin log -> new hashed log file
+		plugin_dir_path(__FILE__) . 'wpcalsync.log' => ctwpsync_log_file(),
+		// churchtools-api library logs (fixed path inside vendor, not configurable)
+		__DIR__ . '/vendor/5pm-hdh/churchtools-api/churchtools-api.log'
+			=> $newDir . DIRECTORY_SEPARATOR . 'churchtools-api.log',
+		__DIR__ . '/vendor/5pm-hdh/churchtools-api/churchtools-api-warning.log'
+			=> $newDir . DIRECTORY_SEPARATOR . 'churchtools-api-warning.log',
+	];
+
+	foreach ($moves as $old => $new) {
+		if (!@is_file($old)) {
+			continue;
+		}
+		if (@is_file($new)) {
+			// Destination exists: append old content, then drop the old file
+			$data = @file_get_contents($old);
+			if ($data !== false) {
+				@file_put_contents($new, $data, FILE_APPEND);
+			}
+			@unlink($old);
+		} elseif (!@rename($old, $new)) {
+			// rename can fail across filesystems; fall back to copy + delete
+			if (@copy($old, $new)) {
+				@unlink($old);
+			}
+		}
+	}
+
+	update_option('ctwpsync_logs_migrated', true);
+}
+add_action('plugins_loaded', 'ctwpsync_migrate_logs', 4); // before settings/init migrations
+
+/**
  * Schedule the event when the plugin is activated, if not already scheduled
  * and run it immediately for the first time
  */

@@ -32,7 +32,7 @@ composer update
 
 | Version | Date       | Highlights |
 |---------|------------|------------|
-| 1.3.4   | 2026-07-14 | Security: stored XSS prevention in event description/title (`wp_kses_post`/`sanitize_text_field`); image download restricted to real image types; SSRF hardening of admin AJAX URL params; fixed manually-quoted `%s` in repeating query; test scripts moved to `tests/` and excluded from build |
+| 1.3.4   | 2026-07-14 | Security: stored XSS prevention in event description/title (`wp_kses_post`/`sanitize_text_field`); image download restricted to real image types; SSRF hardening of admin AJAX URL params; logs moved to hardened `uploads/ctwpsync-logs/` with unguessable name + rotation + one-time migration (`CTWPSYNC_DEBUG` gates library/debug logging); fixed manually-quoted `%s` in repeating query; test scripts moved to `tests/` and excluded from build |
 | 1.3.3   | 2026-07-14 | Bug fix: cron cleanup used `wp_unschedule_hook()` so events scheduled with args are actually removed; user ID (not `WP_User` object) in event args; self-healing migration for duplicate/legacy events (PR #24) |
 | 1.3.2   | 2026-03-04 | Bug fix: image filter skips non-EM_Event objects; guard `event_attributes` before `array_key_exists()` |
 | 1.3.1   | 2026-03-02 | Bug fix: location fallback for empty `getMeetingAt()`; security fixes (XSS, SSRF, path traversal, log protection) |
@@ -74,6 +74,12 @@ Settings stored in `ctwpsync_options` (array). Key fields:
 2. Cron fires `do_this_ctwpsync_hourly()` → `do_action('ctwpsync_includeChurchcalSync')` → includes `churchtools-dosync.php`
 3. "Sync Now" button triggers `ctwpsync_single_sync_event` as a one-time cron event and calls `spawn_cron()`
 4. Sync status tracked via transients: `churchtools_wpcalendarsync_in_progress`, `churchtools_wpcalendarsync_lastupdated`, `churchtools_wpcalendarsync_lastsyncduration`
+
+### Logging
+
+- Plugin log lives in `wp-content/uploads/ctwpsync-logs/wpcalsync-<hash>.log` (hardened dir with `index.php`/`.htaccess`/`web.config`; `<hash>` from `wp_hash()` makes the URL unguessable). Path via `ctwpsync_log_file()`. Rotates at 5 MB keeping one `.1` generation.
+- Define `CTWPSYNC_DEBUG` (`true`) in `wp-config.php` to enable debug-level logging **and** the `churchtools-api` library's own file log (which writes fixed, non-relocatable `*.log` files into `vendor/`). Off by default.
+- `ctwpsync_migrate_logs()` (priority 4 on `plugins_loaded`) moves pre-1.3.4 logs from the plugin/vendor dirs into the new location once, guarded by the `ctwpsync_logs_migrated` option.
 
 ### ChurchTools API Library
 
