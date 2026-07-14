@@ -1,5 +1,15 @@
 # churchtools-wp-calendarsync changelog
 
+## 2026-07-14
+- Release v1.3.3
+- **Bug fix: cron cleanup never removed events scheduled with args (unbounded event duplication → OOM)**
+  - Thanks to [@lichtteil](https://github.com/lichtteil) (Mario) for the diagnosis and fix ([#24](https://github.com/a-schild/churchtools-wp-calendarsync/pull/24))
+  - `wp_clear_scheduled_hook()` without args only removes events whose args hash matches an empty array. Since all `ctwpsync_hourly_event` events are scheduled *with* args, activation, deactivation and the hourly→57-minutes migration never removed anything
+  - A leftover pre-1.1.0 `hourly` event therefore made the migration branch fire on every request, adding one new event per request. On a production multisite this grew the autoloaded `cron` option to ~14.5 MB (~39,000 duplicate events) in 30 days and took the site down with out-of-memory fatals during bootstrap
+  - All cleanup paths now use `wp_unschedule_hook()`, which removes events regardless of their args
+  - Event args now carry the user ID instead of a full serialized `WP_User` object, which had bloated every event entry and persisted the user's password hash and capability map inside the autoloaded `cron` option. `do_this_ctwpsync_hourly()` still accepts the legacy `WP_User` arg from pending events
+  - Added a one-time self-healing migration: any event with a wrong schedule, object args, or duplicates triggers a full `wp_unschedule_hook()` + reschedule of a single clean event, preserving the sync user from existing event args
+
 ## 2026-03-02
 - Release v1.3.1
 - **Bug fix: location fallback when `getMeetingAt()` is empty**
