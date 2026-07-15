@@ -869,15 +869,28 @@ function ctwpsync_dedupe_images_callback(): void {
 	}
 	ctwpsync_register_dedupe_fatal_logger('Image');
 	$dryRun = (($_POST['confirm'] ?? '') !== '1');
+	$logger = ctwpsync_get_logger();
+	$logger->info('Image de-duplication ' . ($dryRun ? 'scan' : 'cleanup') . ' starting');
 
+	// Capture any stray PHP notice/warning output (e.g. when WP_DEBUG_DISPLAY is on):
+	// printed before the JSON it would corrupt the response and the browser would show a
+	// generic "Request failed" (a JSON parse error). We log it instead so the JSON stays valid.
+	ob_start();
 	try {
 		$stats = ctwpsync_dedupe_images($dryRun);
 	} catch (\Throwable $e) {
-		ctwpsync_get_logger()->error('Image de-duplication failed: ' . $e->getMessage() . ' @ ' . $e->getFile() . ':' . $e->getLine());
+		$noise = trim((string) ob_get_clean());
+		$logger->error('Image de-duplication failed: ' . $e->getMessage() . ' @ ' . $e->getFile() . ':' . $e->getLine());
+		if ($noise !== '') {
+			$logger->error('Image de-duplication output before failure: ' . mb_substr($noise, 0, 2000));
+		}
 		wp_send_json_error('De-duplication failed: ' . $e->getMessage());
 	}
+	$noise = trim((string) ob_get_clean());
+	if ($noise !== '') {
+		$logger->error('Image de-duplication produced unexpected output (suppressed to keep the response valid): ' . mb_substr($noise, 0, 2000));
+	}
 
-	$logger = ctwpsync_get_logger();
 	$logger->info(sprintf(
 		'Image de-duplication %s: %d image set(s) checked, %d duplicate set(s), %d featured image(s) re-pointed, %d attachment(s) %s, %d skipped',
 		$dryRun ? 'scan (dry run)' : 'cleanup',
@@ -1069,15 +1082,27 @@ function ctwpsync_dedupe_flyers_callback(): void {
 	}
 	ctwpsync_register_dedupe_fatal_logger('Flyer');
 	$dryRun = (($_POST['confirm'] ?? '') !== '1');
+	$logger = ctwpsync_get_logger();
+	$logger->info('Flyer de-duplication ' . ($dryRun ? 'scan' : 'cleanup') . ' starting');
 
+	// Capture any stray notice/warning output so it can't corrupt the JSON response
+	// (see the image callback for why); log it instead.
+	ob_start();
 	try {
 		$stats = ctwpsync_dedupe_flyers($dryRun);
 	} catch (\Throwable $e) {
-		ctwpsync_get_logger()->error('Flyer de-duplication failed: ' . $e->getMessage() . ' @ ' . $e->getFile() . ':' . $e->getLine());
+		$noise = trim((string) ob_get_clean());
+		$logger->error('Flyer de-duplication failed: ' . $e->getMessage() . ' @ ' . $e->getFile() . ':' . $e->getLine());
+		if ($noise !== '') {
+			$logger->error('Flyer de-duplication output before failure: ' . mb_substr($noise, 0, 2000));
+		}
 		wp_send_json_error('De-duplication failed: ' . $e->getMessage());
 	}
+	$noise = trim((string) ob_get_clean());
+	if ($noise !== '') {
+		$logger->error('Flyer de-duplication produced unexpected output (suppressed to keep the response valid): ' . mb_substr($noise, 0, 2000));
+	}
 
-	$logger = ctwpsync_get_logger();
 	$logger->info(sprintf(
 		'Flyer de-duplication %s: %d flyer(s) checked, %d duplicate set(s), %d event link(s) rewritten, %d attachment(s) %s, %d skipped',
 		$dryRun ? 'scan (dry run)' : 'cleanup',
