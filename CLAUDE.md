@@ -55,7 +55,7 @@ composer update
 | `churchtools-dosync.php` | Core sync logic (included dynamically at runtime). Fetches appointments from ChurchTools API and creates/updates WP Events Manager events. Contains `ctwpsync_getUpdatedCalendarEvents()` and `processCalendarEntry()`. |
 | `includes/SyncConfig.php` | PHP 8.2 readonly class managing sync configuration. Handles de/serialization from WP options and POST data. |
 | `includes/Logger.php` | PHP 8.2 readonly class `SyncLogger` with `LogLevel` enum (DEBUG/INFO/ERROR). Logs to `wpcalsync.log` in plugin dir. |
-| `dashboard/dashboard_view.php` | Admin settings page UI (included from `ctwpsync_dashboard()`). |
+| `dashboard/dashboard_view.php` | Admin settings page UI (included from `ctwpsync_dashboard()`). Organised into five JS-switched tabs (Connection / Sync Options / Status / Tools / Logs) inside one `<form>`; a persistent bottom action bar holds Save + Sync Now. Form is `novalidate` (required fields may be on an inactive tab) with JS validation that jumps to the Connection tab on error; active tab persisted in `localStorage` (`ctwpsync_active_tab`). |
 
 ### Database
 

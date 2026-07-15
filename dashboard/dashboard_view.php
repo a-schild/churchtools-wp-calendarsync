@@ -1,9 +1,26 @@
 <div>
 	<h2>Settings for ChurchTools Calendar Sync</h2>
 	<div>Just modify the fields below:</div>
-	<div>
-		<form method="post" class="ctwpsync_settings" action="" data-action="save_ctwpsync_settings">
+
+	<style>
+	.ctwpsync-tabs .ctwpsync-tab-panel { display: none; }
+	.ctwpsync-tabs .ctwpsync-tab-panel.active { display: block; }
+	.ctwpsync-actionbar { margin-top: 20px; padding-top: 15px; border-top: 1px solid #dcdcde; }
+	</style>
+
+	<div class="ctwpsync-tabs">
+		<nav class="nav-tab-wrapper ctwpsync-nav" style="margin: 10px 0 15px;">
+			<a href="#" class="nav-tab nav-tab-active" data-tab="connection">Connection</a>
+			<a href="#" class="nav-tab" data-tab="syncoptions">Sync Options</a>
+			<a href="#" class="nav-tab" data-tab="status">Status</a>
+			<a href="#" class="nav-tab" data-tab="tools">Tools</a>
+			<a href="#" class="nav-tab" data-tab="logs">Logs</a>
+		</nav>
+
+		<form method="post" class="ctwpsync_settings" action="" data-action="save_ctwpsync_settings" novalidate>
 		<?php wp_nonce_field('ctwpsync_settings_save', 'ctwpsync_nonce'); ?>
+
+		<div class="ctwpsync-tab-panel active" id="ctwpsync-tab-connection" data-tab="connection">
 		<br>ChurchTools-URL (Including https://)<br>
 		<input type="text" size="30" name="ctwpsync_url" id="ctwpsync_url" class="text_box" placeholder="https://yourchurch.church.tools/" value="<?php echo esc_attr($saved_data['url'] ?? ''); ?>" required>
 		<br>ChurchTools API token<?php echo ($saved_data && !empty($saved_data['apitoken'])) ? ' (saved - leave empty to keep)' : ''; ?><br>
@@ -11,7 +28,9 @@
 		<input type="hidden" id="ctwpsync_has_saved_token" value="<?php echo ($saved_data && !empty($saved_data['apitoken'])) ? '1' : '0'; ?>">
 		<button type="button" id="ctwpsync_validate_connection" class="button" style="margin-left: 10px;">Validate Connection</button>
 		<span id="ctwpsync_validation_result" style="margin-left: 10px; cursor: default;"></span>
+		</div><!-- /connection -->
 
+		<div class="ctwpsync-tab-panel" id="ctwpsync-tab-syncoptions" data-tab="syncoptions">
 		<h3>Calendars to Sync</h3>
 		<p>Select which calendars to sync and optionally assign a category to each:</p>
 		<button type="button" id="ctwpsync_load_calendars" class="button">Load Calendars from ChurchTools</button>
@@ -73,22 +92,9 @@
 		<br>Name of a custom attribute in Events Manager. When set, this plugin will not download event images, but directly embed them from ChurchTools.<br>
 		Must be defined in the <a href="https://wp-events-plugin.com/documentation/event-attributes/#enablingactivating">Events Manager settings</a><br>
 		<input type="text" size="30" name="ctwpsync_em_image_attr" id="ctwpsync_em_image_attr" class="text_box" placeholder="disabled" value="<?php echo esc_attr($saved_data['em_image_attr'] ?? ''); ?>">
+		</div><!-- /syncoptions -->
 
-		<h3>Logging</h3>
-		<?php $ctwpsync_current_level = SyncConfig::sanitizeLogLevel($saved_data['log_level'] ?? 'INFO'); ?>
-		<label for="ctwpsync_log_level">Log level</label><br>
-		<select name="ctwpsync_log_level" id="ctwpsync_log_level" style="min-width: 200px;">
-			<option value="ERROR" <?php selected($ctwpsync_current_level, 'ERROR'); ?>>Errors only</option>
-			<option value="INFO" <?php selected($ctwpsync_current_level, 'INFO'); ?>>Info (default)</option>
-			<option value="DEBUG" <?php selected($ctwpsync_current_level, 'DEBUG'); ?>>Debug (verbose)</option>
-		</select>
-		<p class="description">Controls how much detail is written to the sync log below. Choose Debug when troubleshooting (e.g. rate-limit retries). The <code>CTWPSYNC_DEBUG</code> constant, if set in <code>wp-config.php</code>, forces Debug regardless of this setting.</p>
-
-		<br>
-		<input type="submit" value="Save" class="button button-primary">
-		<button type="button" id="ctwpsync_sync_now" class="button" style="margin-left: 10px;">Sync Now</button>
-		<span id="ctwpsync_sync_result" style="margin-left: 10px;"></span>
-
+		<div class="ctwpsync-tab-panel" id="ctwpsync-tab-status" data-tab="status">
 		<h3>Sync Status</h3>
 		<p class="description">All times are shown in the site timezone (<?php echo esc_html(wp_timezone_string()); ?>).</p>
 		<?php
@@ -123,10 +129,8 @@
 			?>
 		</p>
 		<p><strong>Schedule:</strong> Runs automatically every 57 minutes</p>
-	</div>
 
-	<hr>
-	<h3>Events Manager 7.1+ Compatibility</h3>
+		<h3>Events Manager 7.1+ Compatibility</h3>
 	<?php
 	$migration_completed = get_option('ctwpsync_em71_migration_completed');
 	if ($migration_completed) {
@@ -139,9 +143,10 @@
 		echo '<p>To manually trigger the migration now, reload this page.</p>';
 	}
 	?>
+		</div><!-- /status -->
 
-	<hr>
-	<h3>Image de-duplication</h3>
+		<div class="ctwpsync-tab-panel" id="ctwpsync-tab-tools" data-tab="tools">
+		<h3>Image de-duplication</h3>
 	<p class="description">
 		Older versions could import the same ChurchTools image many times, creating duplicate
 		media files (<code>name-1.jpg</code>, <code>name-2.jpg</code>, …) each with a full set of
@@ -171,8 +176,19 @@
 		<span id="ctwpsync_flyer_message" style="margin-left: 10px;"></span>
 	</p>
 	<pre id="ctwpsync_flyer_result" style="display:none; max-height: 240px; overflow: auto; background: #f6f7f7; color: #1e1e1e; padding: 10px; border: 1px solid #ccc; font-family: Consolas, Menlo, monospace; font-size: 12px; white-space: pre-wrap; word-break: break-word;"></pre>
+		</div><!-- /tools -->
 
-	<hr>
+		<div class="ctwpsync-tab-panel" id="ctwpsync-tab-logs" data-tab="logs">
+		<h3>Logging</h3>
+		<?php $ctwpsync_current_level = SyncConfig::sanitizeLogLevel($saved_data['log_level'] ?? 'INFO'); ?>
+		<label for="ctwpsync_log_level">Log level</label><br>
+		<select name="ctwpsync_log_level" id="ctwpsync_log_level" style="min-width: 200px;">
+			<option value="ERROR" <?php selected($ctwpsync_current_level, 'ERROR'); ?>>Errors only</option>
+			<option value="INFO" <?php selected($ctwpsync_current_level, 'INFO'); ?>>Info (default)</option>
+			<option value="DEBUG" <?php selected($ctwpsync_current_level, 'DEBUG'); ?>>Debug (verbose)</option>
+		</select>
+		<p class="description">Controls how much detail is written to the sync log below. Choose Debug when troubleshooting (e.g. rate-limit retries). The <code>CTWPSYNC_DEBUG</code> constant, if set in <code>wp-config.php</code>, forces Debug regardless of this setting.</p>
+
 	<h3>Sync Log</h3>
 	<?php
 	$ctwpsync_eff_level = ctwpsync_effective_log_level();
@@ -195,11 +211,42 @@
 		<span id="ctwpsync_log_message" style="margin-left: 10px;"></span>
 	</p>
 	<pre id="ctwpsync_log_view" style="max-height: 400px; overflow: auto; background: #1e1e1e; color: #e0e0e0; padding: 10px; border: 1px solid #ccc; font-family: Consolas, Menlo, monospace; font-size: 12px; white-space: pre-wrap; word-break: break-word;"><?php echo esc_html(ctwpsync_read_log_tail(300)) ?: 'Log is empty.'; ?></pre>
+		</div><!-- /logs -->
+
+		<div class="ctwpsync-actionbar">
+			<input type="submit" value="Save" class="button button-primary">
+			<button type="button" id="ctwpsync_sync_now" class="button" style="margin-left: 10px;">Sync Now</button>
+			<span id="ctwpsync_sync_result" style="margin-left: 10px;"></span>
+		</div>
+		</form>
+	</div><!-- /ctwpsync-tabs -->
 </div>
 
 <script>
 jQuery(document).ready(function($) {
 	var nonce = '<?php echo wp_create_nonce("ctwpsync_validate"); ?>';
+
+	// --- Settings tabs ---
+	function ctwpsyncActivateTab(slug) {
+		if (!$('.ctwpsync-tab-panel[data-tab="' + slug + '"]').length) {
+			return;
+		}
+		$('.ctwpsync-nav .nav-tab').removeClass('nav-tab-active');
+		$('.ctwpsync-nav .nav-tab[data-tab="' + slug + '"]').addClass('nav-tab-active');
+		$('.ctwpsync-tab-panel').removeClass('active');
+		$('.ctwpsync-tab-panel[data-tab="' + slug + '"]').addClass('active');
+		try { window.localStorage.setItem('ctwpsync_active_tab', slug); } catch (e) {}
+	}
+	$('.ctwpsync-nav .nav-tab').on('click', function(e) {
+		e.preventDefault();
+		ctwpsyncActivateTab($(this).data('tab'));
+	});
+	// Restore the last-used tab (e.g. after the page reloads on Save).
+	(function() {
+		var saved = null;
+		try { saved = window.localStorage.getItem('ctwpsync_active_tab'); } catch (e) {}
+		if (saved) { ctwpsyncActivateTab(saved); }
+	})();
 
 	// Manual validation button
 	$('#ctwpsync_validate_connection').click(function() {
@@ -227,9 +274,13 @@ jQuery(document).ready(function($) {
 		var token = $('#ctwpsync_apitoken').val();
 		var hasSavedToken = $('#ctwpsync_has_saved_token').val() === '1';
 
-		// If URL is empty, let HTML5 validation handle it
+		// The form uses novalidate (required fields may sit on an inactive tab, which
+		// browsers can't focus). Enforce the URL here and jump to the Connection tab.
 		if (!url) {
-			return true;
+			ctwpsyncActivateTab('connection');
+			$('#ctwpsync_validation_result').html('<span style="color:red;">ChurchTools URL is required</span>');
+			e.preventDefault();
+			return false;
 		}
 
 		// If token is empty but we have a saved token, skip validation and allow save
@@ -246,6 +297,7 @@ jQuery(document).ready(function($) {
 
 		// If no token and no saved token, require token
 		if (!token && !hasSavedToken) {
+			ctwpsyncActivateTab('connection');
 			$('#ctwpsync_validation_result').html('<span style="color:red;">API token is required</span>');
 			e.preventDefault();
 			return false;
@@ -277,12 +329,14 @@ jQuery(document).ready(function($) {
 				$('form.ctwpsync_settings').off('submit').submit();
 			} else {
 				var errorMsg = response.data || 'Unknown error';
+				ctwpsyncActivateTab('connection');
 				$('#ctwpsync_validation_result').html('<span style="color:red; cursor:help;" title="' + escapeHtml(errorMsg) + '">&#10007; Validation failed - Save cancelled (hover for details)</span>');
 				$('input[type="submit"]').prop('disabled', false);
 				console.error('[ChurchTools Sync] Validation failed during save:', errorMsg);
 			}
 		}).fail(function(jqXHR, textStatus, errorThrown) {
 			var errorDetail = 'HTTP request failed: ' + textStatus + (errorThrown ? ' - ' + errorThrown : '');
+			ctwpsyncActivateTab('connection');
 			$('#ctwpsync_validation_result').html('<span style="color:red; cursor:help;" title="' + escapeHtml(errorDetail) + '">&#10007; Validation request failed - Save cancelled (hover for details)</span>');
 			$('input[type="submit"]').prop('disabled', false);
 			console.error('[ChurchTools Sync] Validation request failed during save:', errorDetail);
