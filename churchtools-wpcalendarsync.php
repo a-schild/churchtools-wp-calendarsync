@@ -469,6 +469,33 @@ function ctwpsync_get_logger(): SyncLogger {
 }
 
 /**
+ * Register a shutdown handler that records a fatal error (out-of-memory, host
+ * execution-time kill, etc.) to the plugin log, including the peak memory and the
+ * memory_limit so an abort can be diagnosed. AJAX callbacks can't otherwise report a
+ * fatal — the browser only sees a generic "Request failed". Writes with a bare
+ * `error_log()` (minimal allocation) so it still works right after an OOM.
+ *
+ * @param string $label Short label for the operation (e.g. "Image").
+ */
+function ctwpsync_register_dedupe_fatal_logger(string $label): void {
+	$logFile = ctwpsync_log_file();
+	register_shutdown_function(static function () use ($logFile, $label) {
+		$err = error_get_last();
+		if (!$err || !in_array($err['type'], [E_ERROR, E_CORE_ERROR, E_COMPILE_ERROR, E_PARSE], true)) {
+			return;
+		}
+		$ts    = function_exists('wp_date') ? @wp_date('Y-m-d H:i:s') : date('Y-m-d H:i:s');
+		$peak  = @round(memory_get_peak_usage(true) / 1048576, 1) . ' MB';
+		$limit = @ini_get('memory_limit');
+		@error_log(
+			"[{$ts}] ERR: {$label} de-duplication aborted (fatal): {$err['message']} @ {$err['file']}:{$err['line']} (peak {$peak}, memory_limit {$limit})\n",
+			3,
+			$logFile
+		);
+	});
+}
+
+/**
  * Read the tail of the plugin log file for display in the admin.
  *
  * Only the last portion of the file is read (the log rotates at 5 MB), so this
@@ -699,24 +726,43 @@ function ctwpsync_dedupe_images(bool $dryRun = true): array {
 			continue;
 		}
 
-		// Group byte-identical files so unrelated images sharing a name aren't merged.
-		$byHash = [];
+		// Pre-group by file size (cheap, no read) and only hash within same-size sets,
+		// so unique-size images are never read from disk — this keeps the scan fast and
+		// well under memory/time limits even on large libraries.
+		$bySize = [];
 		foreach ($candidates as $attId => $rel) {
 			$abs = rtrim($uploadBase, '/\\') . '/' . $rel;
 			if (!is_file($abs)) {
 				continue;
 			}
-			$hash = @md5_file($abs);
-			if ($hash === false) {
+			$size = @filesize($abs);
+			if ($size === false) {
 				continue;
 			}
-			$byHash[$hash][] = (int) $attId;
+			$bySize[$size][] = ['id' => (int) $attId, 'abs' => $abs];
 		}
 
-		foreach ($byHash as $attIds) {
-			if (count($attIds) <= 1) {
-				continue;
+		$identicalGroups = [];
+		foreach ($bySize as $sizeSet) {
+			if (count($sizeSet) <= 1) {
+				continue; // unique file size cannot be a byte-identical duplicate
 			}
+			$byHash = [];
+			foreach ($sizeSet as $c) {
+				$hash = @md5_file($c['abs']);
+				if ($hash === false) {
+					continue;
+				}
+				$byHash[$hash][] = $c['id'];
+			}
+			foreach ($byHash as $ids) {
+				if (count($ids) > 1) {
+					$identicalGroups[] = $ids;
+				}
+			}
+		}
+
+		foreach ($identicalGroups as $attIds) {
 			sort($attIds);
 			$canonical = (int) $attIds[0];
 			$dupes     = array_slice($attIds, 1);
@@ -818,8 +864,18 @@ function ctwpsync_dedupe_images_callback(): void {
 		wp_send_json_error('Permission denied');
 	}
 	@set_time_limit(300);
+	if (function_exists('wp_raise_memory_limit')) {
+		wp_raise_memory_limit('admin');
+	}
+	ctwpsync_register_dedupe_fatal_logger('Image');
 	$dryRun = (($_POST['confirm'] ?? '') !== '1');
-	$stats  = ctwpsync_dedupe_images($dryRun);
+
+	try {
+		$stats = ctwpsync_dedupe_images($dryRun);
+	} catch (\Throwable $e) {
+		ctwpsync_get_logger()->error('Image de-duplication failed: ' . $e->getMessage() . ' @ ' . $e->getFile() . ':' . $e->getLine());
+		wp_send_json_error('De-duplication failed: ' . $e->getMessage());
+	}
 
 	$logger = ctwpsync_get_logger();
 	$logger->info(sprintf(
@@ -1008,8 +1064,18 @@ function ctwpsync_dedupe_flyers_callback(): void {
 		wp_send_json_error('Permission denied');
 	}
 	@set_time_limit(300);
+	if (function_exists('wp_raise_memory_limit')) {
+		wp_raise_memory_limit('admin');
+	}
+	ctwpsync_register_dedupe_fatal_logger('Flyer');
 	$dryRun = (($_POST['confirm'] ?? '') !== '1');
-	$stats  = ctwpsync_dedupe_flyers($dryRun);
+
+	try {
+		$stats = ctwpsync_dedupe_flyers($dryRun);
+	} catch (\Throwable $e) {
+		ctwpsync_get_logger()->error('Flyer de-duplication failed: ' . $e->getMessage() . ' @ ' . $e->getFile() . ':' . $e->getLine());
+		wp_send_json_error('De-duplication failed: ' . $e->getMessage());
+	}
 
 	$logger = ctwpsync_get_logger();
 	$logger->info(sprintf(
