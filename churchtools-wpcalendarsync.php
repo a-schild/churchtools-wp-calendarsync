@@ -591,6 +591,31 @@ function ctwpsync_download_log_callback(): void {
 }
 
 /**
+ * Normalise a WordPress attachment file path (`_wp_attached_file`, e.g.
+ * `2026/11/pic-1-scaled.jpg`) to a "base key" that groups the WordPress `-N` collision
+ * variants and `-scaled` working copies of the same upload together
+ * (`2026/11|pic|jpg`). Returns null if the path has no usable name/extension.
+ *
+ * @param string $file Relative attachment file path.
+ * @return string|null Base key "dir|name|ext", or null.
+ */
+function ctwpsync_image_base_key(string $file): ?string {
+	if ($file === '') {
+		return null;
+	}
+	$dir  = dirname($file);
+	$dir  = ($dir === '.' || $dir === '') ? '' : $dir;
+	$ext  = pathinfo($file, PATHINFO_EXTENSION);
+	$name = pathinfo($file, PATHINFO_FILENAME);
+	$name = preg_replace('/-scaled$/', '', $name);
+	$name = preg_replace('/-\d+$/', '', $name);
+	if ($name === '' || $ext === '') {
+		return null;
+	}
+	return $dir . '|' . $name . '|' . strtolower($ext);
+}
+
+/**
  * Collapse duplicate event-image attachments created before the
  * `_ctwpsync_ct_image_id` de-duplication existed.
  *
@@ -710,61 +735,57 @@ function ctwpsync_dedupe_images(bool $dryRun = true, float $budgetSeconds = 45.0
 
 	$uploadBase = wp_get_upload_dir()['basedir'];
 
-	// 2. Reduce those attachments to distinct "base file" keys, stripping WordPress'
-	//    -scaled and -N suffixes (e.g. 2026/11/pic-1-scaled.jpg -> 2026/11/pic + jpg).
-	$baseKeys = [];
-	foreach (array_keys($pluginAtts) as $attId) {
-		$file = get_post_meta($attId, '_wp_attached_file', true);
-		if (!$file || !is_string($file)) {
-			continue;
-		}
-		$dir  = dirname($file);
-		$dir  = ($dir === '.' || $dir === '') ? '' : $dir;
-		$ext  = pathinfo($file, PATHINFO_EXTENSION);
-		$name = pathinfo($file, PATHINFO_FILENAME);
-		$name = preg_replace('/-scaled$/', '', $name);
-		$name = preg_replace('/-\d+$/', '', $name);
-		if ($name === '' || $ext === '') {
-			continue;
-		}
-		$key = $dir . '|' . $name . '|' . strtolower($ext);
-		$baseKeys[$key] = ['dir' => $dir, 'base' => $name, 'ext' => $ext];
-	}
-
-	// 3. For each base key, gather sibling attachments, confirm identical files, collapse.
-	foreach ($baseKeys as $info) {
-		$stats['images']++;
-		$dir  = $info['dir'];
-		$base = $info['base'];
-		$ext  = $info['ext'];
-
-		$likePrefix = ($dir === '' ? '' : $dir . '/') . $base;
+	// 2. Distinct "base file" keys of the plugin's own attachments (targeted query, small).
+	$pluginBaseKeys = [];
+	foreach (array_chunk(array_keys($pluginAtts), 500) as $chunk) {
+		$ph   = implode(',', array_fill(0, count($chunk), '%d'));
 		$rows = $wpdb->get_results($wpdb->prepare(
-			"SELECT post_id, meta_value FROM {$wpdb->postmeta} WHERE meta_key = '_wp_attached_file' AND meta_value LIKE %s",
-			$wpdb->esc_like($likePrefix) . '%'
+			"SELECT meta_value AS f FROM {$wpdb->postmeta} WHERE meta_key = '_wp_attached_file' AND post_id IN ($ph)",
+			...$chunk
 		));
-		if (!$rows) {
-			continue;
-		}
-
-		// Keep only real attachments whose file is exactly base(-N)?(-scaled)?.ext
-		$pattern = '#^' . preg_quote($likePrefix, '#') . '(-\d+)?(-scaled)?\.' . preg_quote($ext, '#') . '$#i';
-		$candidates = [];
 		foreach ($rows as $r) {
-			if (preg_match($pattern, $r->meta_value) && get_post_type((int) $r->post_id) === 'attachment') {
-				$candidates[(int) $r->post_id] = $r->meta_value;
+			$bk = ctwpsync_image_base_key((string) $r->f);
+			if ($bk !== null) {
+				$pluginBaseKeys[$bk] = true;
 			}
 		}
+	}
+	if (!$pluginBaseKeys) {
+		return $stats;
+	}
+
+	// 3. One bulk query over all attachment files, keeping only those in a plugin base
+	//    key. This replaces a per-base LIKE scan of postmeta (one full scan per image),
+	//    which made the scan run for minutes and get killed by the proxy timeout.
+	$byBase   = []; // baseKey => [ ['id' => int, 'rel' => string], ... ]
+	$allFiles = $wpdb->get_results(
+		"SELECT pm.post_id, pm.meta_value AS f
+		 FROM {$wpdb->postmeta} pm
+		 INNER JOIN {$wpdb->posts} p ON p.ID = pm.post_id
+		 WHERE pm.meta_key = '_wp_attached_file' AND p.post_type = 'attachment'"
+	);
+	foreach ($allFiles as $row) {
+		$bk = ctwpsync_image_base_key((string) $row->f);
+		if ($bk === null || !isset($pluginBaseKeys[$bk])) {
+			continue;
+		}
+		$byBase[$bk][] = ['id' => (int) $row->post_id, 'rel' => (string) $row->f];
+	}
+	unset($allFiles);
+
+	// 4. Process each base key. The dry-run scan only groups by file size (a cheap stat,
+	//    no content read) to estimate the count and stays fast on huge libraries; the
+	//    cleanup byte-verifies (md5) before deleting, in time-boxed batches.
+	foreach ($byBase as $candidates) {
+		$stats['images']++;
 		if (count($candidates) <= 1) {
 			continue;
 		}
 
-		// Pre-group by file size (cheap, no read) and only hash within same-size sets,
-		// so unique-size images are never read from disk — this keeps the scan fast and
-		// well under memory/time limits even on large libraries.
+		// Group byte-identical files (size pre-filter; md5 only during cleanup).
 		$bySize = [];
-		foreach ($candidates as $attId => $rel) {
-			$abs = rtrim($uploadBase, '/\\') . '/' . $rel;
+		foreach ($candidates as $c) {
+			$abs = rtrim($uploadBase, '/\\') . '/' . $c['rel'];
 			if (!is_file($abs)) {
 				continue;
 			}
@@ -772,7 +793,25 @@ function ctwpsync_dedupe_images(bool $dryRun = true, float $budgetSeconds = 45.0
 			if ($size === false) {
 				continue;
 			}
-			$bySize[$size][] = ['id' => (int) $attId, 'abs' => $abs];
+			$bySize[$size][] = ['id' => (int) $c['id'], 'abs' => $abs];
+		}
+
+		if ($dryRun) {
+			// Estimate only: same base + same size ⇒ a duplicate set (the -N / -scaled
+			// copies are byte-identical). No file contents are read.
+			foreach ($bySize as $sizeSet) {
+				if (count($sizeSet) > 1) {
+					$stats['dupe_groups']++;
+					$stats['attachments_deleted'] += count($sizeSet) - 1;
+				}
+			}
+			continue;
+		}
+
+		// Cleanup: stop if this request is out of its time budget.
+		if ($budgetSeconds > 0 && (microtime(true) - $startTime) > $budgetSeconds) {
+			$stats['more'] = true;
+			break;
 		}
 
 		$identicalGroups = [];
