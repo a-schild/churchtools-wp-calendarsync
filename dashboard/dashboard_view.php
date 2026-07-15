@@ -74,12 +74,23 @@
 		Must be defined in the <a href="https://wp-events-plugin.com/documentation/event-attributes/#enablingactivating">Events Manager settings</a><br>
 		<input type="text" size="30" name="ctwpsync_em_image_attr" id="ctwpsync_em_image_attr" class="text_box" placeholder="disabled" value="<?php echo esc_attr($saved_data['em_image_attr'] ?? ''); ?>">
 
-		<br><br>
+		<h3>Logging</h3>
+		<?php $ctwpsync_current_level = SyncConfig::sanitizeLogLevel($saved_data['log_level'] ?? 'INFO'); ?>
+		<label for="ctwpsync_log_level">Log level</label><br>
+		<select name="ctwpsync_log_level" id="ctwpsync_log_level" style="min-width: 200px;">
+			<option value="ERROR" <?php selected($ctwpsync_current_level, 'ERROR'); ?>>Errors only</option>
+			<option value="INFO" <?php selected($ctwpsync_current_level, 'INFO'); ?>>Info (default)</option>
+			<option value="DEBUG" <?php selected($ctwpsync_current_level, 'DEBUG'); ?>>Debug (verbose)</option>
+		</select>
+		<p class="description">Controls how much detail is written to the sync log below. Choose Debug when troubleshooting (e.g. rate-limit retries). The <code>CTWPSYNC_DEBUG</code> constant, if set in <code>wp-config.php</code>, forces Debug regardless of this setting.</p>
+
+		<br>
 		<input type="submit" value="Save" class="button button-primary">
 		<button type="button" id="ctwpsync_sync_now" class="button" style="margin-left: 10px;">Sync Now</button>
 		<span id="ctwpsync_sync_result" style="margin-left: 10px;"></span>
 
 		<h3>Sync Status</h3>
+		<p class="description">All times are shown in the site timezone (<?php echo esc_html(wp_timezone_string()); ?>).</p>
 		<?php
 		$sync_in_progress = get_transient('churchtools_wpcalendarsync_in_progress');
 		$next_scheduled = ctwpsync_get_next_scheduled('ctwpsync_hourly_event');
@@ -98,7 +109,7 @@
 		<p><strong>Next scheduled sync:</strong>
 			<?php
 			if ($next_scheduled) {
-				$next_time = date('Y-m-d H:i:s', $next_scheduled);
+				$next_time = wp_date('Y-m-d H:i:s', $next_scheduled);
 				$time_diff = $next_scheduled - time();
 				if ($time_diff > 0) {
 					$minutes = floor($time_diff / 60);
@@ -128,6 +139,30 @@
 		echo '<p>To manually trigger the migration now, reload this page.</p>';
 	}
 	?>
+
+	<hr>
+	<h3>Sync Log</h3>
+	<?php
+	$ctwpsync_eff_level = ctwpsync_effective_log_level();
+	$ctwpsync_level_forced = (defined('CTWPSYNC_DEBUG') && CTWPSYNC_DEBUG);
+	?>
+	<p class="description">
+		Most recent log entries (newest at the bottom); timestamps are in the site timezone (<?php echo esc_html(wp_timezone_string()); ?>). Effective log level:
+		<strong><?php echo esc_html($ctwpsync_eff_level); ?></strong><?php
+		if ($ctwpsync_level_forced) {
+			echo ' &mdash; forced by the <code>CTWPSYNC_DEBUG</code> constant, overriding the <strong>Log level</strong> setting above';
+		} else {
+			echo ' &mdash; set by the <strong>Log level</strong> option above';
+		}
+		?>.
+	</p>
+	<p>
+		<button type="button" id="ctwpsync_log_refresh" class="button">Refresh</button>
+		<a href="<?php echo esc_url(admin_url('admin-ajax.php?action=ctwpsync_download_log&nonce=' . wp_create_nonce('ctwpsync_validate'))); ?>" class="button" id="ctwpsync_log_download">Download full log</a>
+		<button type="button" id="ctwpsync_log_clear" class="button">Clear log</button>
+		<span id="ctwpsync_log_message" style="margin-left: 10px;"></span>
+	</p>
+	<pre id="ctwpsync_log_view" style="max-height: 400px; overflow: auto; background: #1e1e1e; color: #e0e0e0; padding: 10px; border: 1px solid #ccc; font-family: Consolas, Menlo, monospace; font-size: 12px; white-space: pre-wrap; word-break: break-word;"><?php echo esc_html(ctwpsync_read_log_tail(300)) ?: 'Log is empty.'; ?></pre>
 </div>
 
 <script>
@@ -502,6 +537,51 @@ jQuery(document).ready(function($) {
 		var div = document.createElement('div');
 		div.textContent = text;
 		return div.innerHTML;
+	}
+
+	// --- Sync log viewer ---
+	function loadSyncLog() {
+		var $msg = $('#ctwpsync_log_message');
+		$msg.text('Loading…').css('color', '');
+		$.post(ajaxurl, { action: 'ctwpsync_get_log', nonce: nonce }, function(response) {
+			if (response.success) {
+				var log = response.data.log || '';
+				// textContent (via .text) keeps this safe from HTML injection in log content
+				$('#ctwpsync_log_view').text(response.data.empty ? 'Log is empty.' : log);
+				$('#ctwpsync_log_view').scrollTop($('#ctwpsync_log_view')[0].scrollHeight);
+				$msg.text('');
+			} else {
+				$msg.text('Failed to load log: ' + (response.data || 'unknown error')).css('color', 'red');
+			}
+		}).fail(function() {
+			$msg.text('Failed to load log.').css('color', 'red');
+		});
+	}
+
+	$('#ctwpsync_log_refresh').click(function() {
+		loadSyncLog();
+	});
+
+	$('#ctwpsync_log_clear').click(function() {
+		if (!window.confirm('Clear the sync log? This cannot be undone.')) {
+			return;
+		}
+		var $msg = $('#ctwpsync_log_message');
+		$.post(ajaxurl, { action: 'ctwpsync_clear_log', nonce: nonce }, function(response) {
+			if (response.success) {
+				$('#ctwpsync_log_view').text('Log is empty.');
+				$msg.text('Log cleared.').css('color', 'green');
+			} else {
+				$msg.text('Failed to clear log: ' + (response.data || 'unknown error')).css('color', 'red');
+			}
+		}).fail(function() {
+			$msg.text('Failed to clear log.').css('color', 'red');
+		});
+	});
+
+	// Scroll the initially-rendered log to the newest entry.
+	if ($('#ctwpsync_log_view').length) {
+		$('#ctwpsync_log_view').scrollTop($('#ctwpsync_log_view')[0].scrollHeight);
 	}
 
 	// Initialize calendar form fields for existing selections

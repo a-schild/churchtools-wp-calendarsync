@@ -51,7 +51,21 @@ readonly class SyncLogger {
         }
 
         $this->rotateIfNeeded();
-        error_log("{$level->value}: {$message}\n", 3, $this->logFile);
+        $timestamp = $this->timestamp();
+        error_log("[{$timestamp}] {$level->value}: {$message}\n", 3, $this->logFile);
+    }
+
+    /**
+     * Timestamp for a log line. Uses the WordPress site timezone when available
+     * (so it matches the times shown on the dashboard); falls back to server
+     * time so the logger still works outside WordPress.
+     *
+     * @return string Formatted timestamp, e.g. "2026-07-15 16:04:12"
+     */
+    private function timestamp(): string {
+        return function_exists('wp_date')
+            ? wp_date('Y-m-d H:i:s')
+            : date('Y-m-d H:i:s');
     }
 
     /**

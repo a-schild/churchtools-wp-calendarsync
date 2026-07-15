@@ -12,6 +12,12 @@
  */
 readonly class SyncConfig {
     /**
+     * Valid log levels, from least to most verbose.
+     * ERROR = errors only, INFO = errors + info (default), DEBUG = everything.
+     */
+    public const LOG_LEVELS = ['ERROR', 'INFO', 'DEBUG'];
+
+    /**
      * Create a new sync configuration
      *
      * @param string $url ChurchTools URL
@@ -22,6 +28,7 @@ readonly class SyncConfig {
      * @param int $resourceTypeForCategories Resource type ID for category mapping (-1 to disable)
      * @param string $emImageAttr Events Manager custom attribute for image URLs (empty to disable)
      * @param bool $enableTagCategories Whether to sync CT appointment tags as categories
+     * @param string $logLevel Log verbosity: ERROR, INFO or DEBUG
      */
     public function __construct(
         public string $url,
@@ -32,7 +39,19 @@ readonly class SyncConfig {
         public int $resourceTypeForCategories = -1,
         public string $emImageAttr = '',
         public bool $enableTagCategories = false,
+        public string $logLevel = 'INFO',
     ) {}
+
+    /**
+     * Normalise an arbitrary value to a valid log level, defaulting to INFO.
+     *
+     * @param mixed $level
+     * @return string One of self::LOG_LEVELS
+     */
+    public static function sanitizeLogLevel(mixed $level): string {
+        $level = is_string($level) ? strtoupper(trim($level)) : '';
+        return in_array($level, self::LOG_LEVELS, true) ? $level : 'INFO';
+    }
 
     /**
      * Create configuration from POST data
@@ -63,6 +82,7 @@ readonly class SyncConfig {
             resourceTypeForCategories: (int)trim($_POST['ctwpsync_resourcetype_for_categories'] ?? '-1'),
             emImageAttr: sanitize_text_field(trim($_POST['ctwpsync_em_image_attr'] ?? '')),
             enableTagCategories: isset($_POST['ctwpsync_enable_tag_categories']),
+            logLevel: self::sanitizeLogLevel($_POST['ctwpsync_log_level'] ?? 'INFO'),
         );
     }
 
@@ -99,6 +119,7 @@ readonly class SyncConfig {
             resourceTypeForCategories: (int)($options['resourcetype_for_categories'] ?? -1),
             emImageAttr: $options['em_image_attr'] ?? '',
             enableTagCategories: $options['enable_tag_categories'] ?? false,
+            logLevel: self::sanitizeLogLevel($options['log_level'] ?? 'INFO'),
         );
     }
 
@@ -117,6 +138,7 @@ readonly class SyncConfig {
             'resourcetype_for_categories' => $this->resourceTypeForCategories,
             'em_image_attr' => $this->emImageAttr,
             'enable_tag_categories' => $this->enableTagCategories,
+            'log_level' => $this->logLevel,
         ];
     }
 

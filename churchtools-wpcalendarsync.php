@@ -10,7 +10,7 @@
  * Plugin Name:       Churchtools WP Calendarsync
  * Plugin URI:        https://github.com/a-schild/churchtools-wp-calendarsync
  * Description:       Churchtools wordpress calendar sync to events manager, requires "Events Manager" plugin. The sync is scheduled every hour to update WP events from churchtool.
- * Version:           1.3.6
+ * Version:           1.4.0
  * Author:            André Schild
  * Author URI:        https://github.com/a-schild/churchtools-wp-calendarsync/
  * License:           GPLv2 or later
@@ -57,6 +57,184 @@ function ctwpsync_admin_notice_events_manager_required(): void {
 }
 
 /**
+ * Whether the plugin is configured enough to actually sync: Events Manager
+ * active, a ChurchTools URL + API token set, and at least one calendar selected.
+ * Used to suppress the sync-failure warning during initial setup.
+ */
+function ctwpsync_is_configured(): bool {
+	if (!ctwpsync_is_events_manager_active()) {
+		return false;
+	}
+	$options = get_option('ctwpsync_options');
+	if (!is_array($options)) {
+		return false;
+	}
+	if (empty($options['url']) || empty($options['apitoken'])) {
+		return false;
+	}
+	// A calendar must be selected. Accept the current 'calendars' format as well
+	// as the pre-migration 'ids' array, in case migration has not run yet.
+	$has_calendars = !empty($options['calendars']) && is_array($options['calendars']);
+	$has_legacy_ids = !empty($options['ids']) && is_array($options['ids']);
+	return $has_calendars || $has_legacy_ids;
+}
+
+/**
+ * Number of consecutive failed sync cycles required before warning the admin.
+ */
+if (!defined('CTWPSYNC_FAILURE_WARN_THRESHOLD')) {
+	define('CTWPSYNC_FAILURE_WARN_THRESHOLD', 4);
+}
+
+/**
+ * Warn on the WP dashboard when the plugin is set up correctly but the last few
+ * sync cycles all failed (e.g. ChurchTools API rate limiting / connection
+ * errors). Suppressed until setup is complete so it does not nag new installs.
+ */
+add_action('admin_notices', 'ctwpsync_admin_notice_sync_failing');
+function ctwpsync_admin_notice_sync_failing(): void {
+	if (!current_user_can('manage_options')) {
+		return;
+	}
+	$failures = (int) get_option('ctwpsync_consecutive_failures', 0);
+	if ($failures < CTWPSYNC_FAILURE_WARN_THRESHOLD) {
+		return;
+	}
+	// If the last run was aborted, the dedicated "aborted" notice below is more
+	// specific and recent — defer to it to avoid stacking two red notices.
+	if (get_option('ctwpsync_last_run_aborted')) {
+		return;
+	}
+	// Only warn once the plugin is actually configured, per requirement.
+	if (!ctwpsync_is_configured()) {
+		return;
+	}
+
+	$last_error = get_option('ctwpsync_last_sync_error');
+	$message = is_array($last_error) && !empty($last_error['message']) ? $last_error['message'] : '';
+	$when = is_array($last_error) && !empty($last_error['time']) ? $last_error['time'] : '';
+	$settings_url = admin_url('options-general.php?page=churchtools-wpcalendarsync');
+	?>
+	<div class="notice notice-error is-dismissible">
+		<p>
+			<strong>ChurchTools Calendar Sync:</strong>
+			<?php
+			printf(
+				/* translators: %d: number of consecutive failed sync cycles */
+				esc_html__('The last %d sync cycles failed, so events may be out of date.', 'ctwpsync'),
+				(int) $failures
+			);
+			?>
+			<?php if ($message !== ''): ?>
+				<br>
+				<em><?php echo esc_html__('Last error:', 'ctwpsync'); ?></em>
+				<code><?php echo esc_html($message); ?></code>
+				<?php if ($when !== ''): ?>
+					<?php echo esc_html(sprintf('(%s)', $when)); ?>
+				<?php endif; ?>
+			<?php endif; ?>
+			<br>
+			<a href="<?php echo esc_url($settings_url); ?>"><?php echo esc_html__('Open ChurchTools Calendar Sync settings', 'ctwpsync'); ?></a>
+		</p>
+	</div>
+	<?php
+}
+
+/**
+ * Record that a sync run was aborted before completion — a hard kill (host
+ * execution-time / memory limit) or fatal that the normal try/catch could not
+ * handle, so nothing was written to the log by the sync itself. Drives the
+ * "last sync aborted" admin notice.
+ *
+ * @param string $reason Human-readable reason shown in the notice/log
+ */
+function ctwpsync_record_sync_aborted(string $reason): void {
+	// Mark a finish so the next-run check does not also flag this same run.
+	update_option('ctwpsync_last_sync_finished_ts', time(), false);
+	update_option('ctwpsync_last_run_aborted', [
+		'message' => $reason,
+		'time'    => current_time('mysql'), // site timezone, for admin display
+	], false);
+	// Clear the stuck "in progress" marker so the status panel doesn't show a
+	// sync that will never finish.
+	delete_transient('churchtools_wpcalendarsync_in_progress');
+	// Best-effort log line (the sync's logger global may still be set). This is
+	// what makes the abort visible in the log going forward.
+	if (function_exists('logError')) {
+		@logError('Sync aborted: ' . $reason);
+	}
+}
+
+/**
+ * Detect (on the next run) a previous sync that recorded a start but never a
+ * finish. This covers a hard SIGKILL where the shutdown handler below could not
+ * run. Called at the start of a sync, before the current run's start is recorded.
+ */
+function ctwpsync_check_previous_run_aborted(): void {
+	$started  = (int) get_option('ctwpsync_last_sync_started_ts', 0);
+	$finished = (int) get_option('ctwpsync_last_sync_finished_ts', 0);
+	if ($started > 0 && $started > $finished) {
+		ctwpsync_record_sync_aborted('the previous sync was terminated by the host before it finished (e.g. execution-time or memory limit); no completion was recorded');
+	}
+}
+
+/**
+ * Shutdown handler registered at sync start. Fires on PHP-level fatals and the
+ * execution-time limit (which PHP still turns into a shutdown), recording the
+ * abort before the request dies. A normal end sets $ctwpsync_run_completed, so
+ * this only acts on genuine aborts. A true SIGKILL never reaches here; that case
+ * is caught by ctwpsync_check_previous_run_aborted() on the next run.
+ */
+function ctwpsync_detect_aborted_sync(): void {
+	if (!empty($GLOBALS['ctwpsync_run_completed'])) {
+		return; // completed normally or via a caught exception
+	}
+	$last = error_get_last();
+	$fatalMask = E_ERROR | E_PARSE | E_CORE_ERROR | E_COMPILE_ERROR | E_USER_ERROR;
+	if ($last && ($last['type'] & $fatalMask)) {
+		ctwpsync_record_sync_aborted('a fatal error stopped the sync before completion: ' . $last['message']);
+	} else {
+		ctwpsync_record_sync_aborted('the sync stopped before completion (most likely the host execution-time or memory limit)');
+	}
+}
+
+/**
+ * Warn on the WP dashboard when the last sync run was aborted mid-cycle (killed
+ * by the host / fatal), i.e. it never completed and produced no normal error.
+ * Shown immediately (not gated on a failure streak). Suppressed until setup is
+ * complete. Cleared automatically on the next successful sync.
+ */
+add_action('admin_notices', 'ctwpsync_admin_notice_sync_aborted');
+function ctwpsync_admin_notice_sync_aborted(): void {
+	if (!current_user_can('manage_options')) {
+		return;
+	}
+	$aborted = get_option('ctwpsync_last_run_aborted');
+	if (empty($aborted)) {
+		return;
+	}
+	if (!ctwpsync_is_configured()) {
+		return;
+	}
+	$message = is_array($aborted) && !empty($aborted['message']) ? $aborted['message'] : 'it stopped before completing';
+	$when = is_array($aborted) && !empty($aborted['time']) ? $aborted['time'] : '';
+	$settings_url = admin_url('options-general.php?page=churchtools-wpcalendarsync');
+	?>
+	<div class="notice notice-warning is-dismissible">
+		<p>
+			<strong>ChurchTools Calendar Sync:</strong>
+			<?php echo esc_html__('The last sync did not finish —', 'ctwpsync'); ?>
+			<?php echo esc_html($message); ?><?php if ($when !== ''): ?> <?php echo esc_html(sprintf('(%s)', $when)); ?><?php endif; ?>.
+			<br>
+			<?php echo esc_html__('This usually means the hosting stopped the process. Consider reducing the "future days" sync window, or ask your host to raise the PHP execution-time / memory limits.', 'ctwpsync'); ?>
+			<br>
+			<a href="<?php echo esc_url($settings_url); ?>"><?php echo esc_html__('Open ChurchTools Calendar Sync settings', 'ctwpsync'); ?></a>
+		</p>
+	</div>
+	<?php
+}
+
+/**
  * Deactivate this plugin if Events Manager is deactivated
  */
 add_action('deactivated_plugin', 'ctwpsync_check_events_manager_deactivation');
@@ -90,7 +268,7 @@ function ctwpsync_add_settings_link(array $links): array {
  * Start at version 1.0.0 and use SemVer - https://semver.org
  * Rename this for your plugin and update it as you release new versions.
  */
-define( 'CTWPSYNC_VERSION', '1.3.6' );
+define( 'CTWPSYNC_VERSION', '1.4.0' );
 
 function ctwpsync_setup_menu(): void {
 	add_options_page('ChurchTools Calendar Importer', 'ChurchTools Calsync', 'manage_options', 'churchtools-wpcalendarsync', 'ctwpsync_dashboard');
@@ -255,6 +433,117 @@ function ctwpsync_protect_dir(string $dir): void {
 function ctwpsync_log_file(): string {
 	$hash = substr(wp_hash('ctwpsync-log-file'), 0, 16);
 	return ctwpsync_log_dir() . DIRECTORY_SEPARATOR . "wpcalsync-{$hash}.log";
+}
+
+/**
+ * Return the effective plugin log level, accounting for the CTWPSYNC_DEBUG
+ * override. This is the single source of truth used both by the sync
+ * (churchtools-dosync.php) and the settings-page log panel.
+ *
+ * @return string One of SyncConfig::LOG_LEVELS (ERROR / INFO / DEBUG)
+ */
+function ctwpsync_effective_log_level(): string {
+	$options = get_option('ctwpsync_options');
+	$level = SyncConfig::sanitizeLogLevel(is_array($options) ? ($options['log_level'] ?? 'INFO') : 'INFO');
+	if (defined('CTWPSYNC_DEBUG') && CTWPSYNC_DEBUG) {
+		$level = 'DEBUG'; // constant forces full verbosity regardless of the setting
+	}
+	return $level;
+}
+
+/**
+ * Read the tail of the plugin log file for display in the admin.
+ *
+ * Only the last portion of the file is read (the log rotates at 5 MB), so this
+ * stays cheap even for large logs. Always reads the fixed, plugin-controlled
+ * path from ctwpsync_log_file() — never a caller-supplied path.
+ *
+ * @param int $maxLines Maximum number of trailing lines to return
+ * @return string The trailing log lines (newline-separated), or '' if no log
+ */
+function ctwpsync_read_log_tail(int $maxLines = 300): string {
+	$file = ctwpsync_log_file();
+	if (!is_readable($file)) {
+		return '';
+	}
+	$readBytes = 262144; // read at most the last 256 KB
+	$fh = @fopen($file, 'rb');
+	if (!$fh) {
+		return '';
+	}
+	$size = @filesize($file);
+	if ($size !== false && $size > $readBytes) {
+		fseek($fh, -$readBytes, SEEK_END);
+		fgets($fh); // discard the (probably partial) first line
+	}
+	$lines = [];
+	while (($line = fgets($fh)) !== false) {
+		$lines[] = rtrim($line, "\r\n");
+	}
+	fclose($fh);
+	if (count($lines) > $maxLines) {
+		$lines = array_slice($lines, -$maxLines);
+	}
+	return implode("\n", $lines);
+}
+
+/**
+ * AJAX: return the tail of the sync log for the admin log viewer.
+ */
+add_action('wp_ajax_ctwpsync_get_log', 'ctwpsync_get_log_callback');
+function ctwpsync_get_log_callback(): void {
+	if (!wp_verify_nonce($_POST['nonce'] ?? '', 'ctwpsync_validate')) {
+		wp_send_json_error('Security check failed');
+	}
+	if (!current_user_can('manage_options')) {
+		wp_send_json_error('Permission denied');
+	}
+	$log = ctwpsync_read_log_tail(300);
+	wp_send_json_success([
+		'log'   => $log,
+		'empty' => ($log === ''),
+	]);
+}
+
+/**
+ * AJAX: clear the sync log (truncate current file and drop the rotated copy).
+ */
+add_action('wp_ajax_ctwpsync_clear_log', 'ctwpsync_clear_log_callback');
+function ctwpsync_clear_log_callback(): void {
+	if (!wp_verify_nonce($_POST['nonce'] ?? '', 'ctwpsync_validate')) {
+		wp_send_json_error('Security check failed');
+	}
+	if (!current_user_can('manage_options')) {
+		wp_send_json_error('Permission denied');
+	}
+	$file = ctwpsync_log_file();
+	@file_put_contents($file, '');
+	@unlink($file . '.1'); // rotated previous generation, if any
+	wp_send_json_success('Log cleared');
+}
+
+/**
+ * AJAX: stream the full log file as a download. Uses a GET nonce because it is
+ * opened as a link. Always serves the fixed plugin log path.
+ */
+add_action('wp_ajax_ctwpsync_download_log', 'ctwpsync_download_log_callback');
+function ctwpsync_download_log_callback(): void {
+	if (!wp_verify_nonce($_GET['nonce'] ?? '', 'ctwpsync_validate')) {
+		wp_die('Security check failed');
+	}
+	if (!current_user_can('manage_options')) {
+		wp_die('Permission denied');
+	}
+	$file = ctwpsync_log_file();
+	if (!is_readable($file)) {
+		wp_die('No log file found');
+	}
+	nocache_headers();
+	header('Content-Type: text/plain; charset=utf-8');
+	header('Content-Disposition: attachment; filename="ctwpsync-log-' . gmdate('Ymd-His') . '.txt"');
+	header('Content-Length: ' . filesize($file));
+	readfile($file);
+	exit;
 }
 
 /**
@@ -805,15 +1094,22 @@ function ctwpsync_trigger_sync_callback(): void {
 		wp_send_json_error('Permission denied');
 	}
 
+	// Capture the current (logged-in admin) user. The cron event runs in an
+	// unauthenticated loopback request with no current user, and the sync in
+	// churchtools-dosync.php bails out ("No user specified" / "User not logged
+	// in") unless a user is set. Pass the ID so the event can restore it, the
+	// same way the hourly event does.
+	$user_id = get_current_user_id();
+
 	// Check if a sync is already scheduled within the next minute
-	$next_scheduled = wp_next_scheduled('ctwpsync_single_sync_event');
+	$next_scheduled = wp_next_scheduled('ctwpsync_single_sync_event', [$user_id]);
 	if ($next_scheduled && $next_scheduled > time() && $next_scheduled < time() + 60) {
 		wp_send_json_success('Sync already scheduled');
 		return;
 	}
 
 	// Schedule a one-time sync event to run immediately
-	$scheduled = wp_schedule_single_event(time(), 'ctwpsync_single_sync_event');
+	$scheduled = wp_schedule_single_event(time(), 'ctwpsync_single_sync_event', [$user_id]);
 
 	if ($scheduled === false) {
 		error_log('[ChurchTools Sync] Failed to schedule sync event');
@@ -832,9 +1128,15 @@ function ctwpsync_trigger_sync_callback(): void {
 /**
  * Handle the single sync event triggered by "Sync Now" button
  */
-add_action('ctwpsync_single_sync_event', 'ctwpsync_run_single_sync');
-function ctwpsync_run_single_sync(): void {
+add_action('ctwpsync_single_sync_event', 'ctwpsync_run_single_sync', 10, 1);
+function ctwpsync_run_single_sync($current_user = 0): void {
 	error_log('[ChurchTools Sync] Running single sync event');
+	// Restore the user context captured when the sync was scheduled; the sync
+	// needs a logged-in user to own the created events (see do_this_ctwpsync_hourly).
+	$user_id = $current_user instanceof WP_User ? (int) $current_user->ID : (int) $current_user;
+	if ($user_id > 0) {
+		wp_set_current_user($user_id);
+	}
 	do_action('ctwpsync_includeChurchcalSync');
 }
 
@@ -867,7 +1169,7 @@ function ctwpsync_get_sync_status_callback(): void {
 		'started_at' => $sync_in_progress ?: null,
 		'last_updated' => $last_updated ?: 'Never',
 		'last_duration' => $last_duration ?: 'N/A',
-		'next_scheduled' => $next_scheduled ? date('Y-m-d H:i:s', $next_scheduled) : null,
+		'next_scheduled' => $next_scheduled ? wp_date('Y-m-d H:i:s', $next_scheduled) : null,
 		'next_scheduled_minutes' => $next_scheduled ? max(0, floor(($next_scheduled - time()) / 60)) : null,
 	]);
 }

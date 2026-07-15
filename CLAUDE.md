@@ -32,6 +32,7 @@ composer update
 
 | Version | Date       | Highlights |
 |---------|------------|------------|
+| 1.4.0   | 2026-07-15 | Reliability & observability release for rate-limited/constrained hosts. **Bug fixes:** (1) sync silently stopped on rate-limited CT servers — a `429 Too many requests` aborted the whole sync every cycle (the `churchtools-api` library has no retry logic); now installs a Guzzle retry/backoff middleware (retries `429`/`5xx` up to 5×, honours `Retry-After` capped 30 s, else exponential 1/2/4/8/16 s) via `CTClient::setClient()`, with each retry logged; (2) "Sync Now" no-opped — the one-time `ctwpsync_single_sync_event` ran with no current user, now captures the admin ID and restores it via `wp_set_current_user()` like `do_this_ctwpsync_hourly`. **Robustness:** per-request Guzzle timeouts (connect 10 s / total 30 s) + 30 s image-download timeout + `set_time_limit(300)` refreshed per appointment; concurrency guard with heartbeat lease (`churchtools_wpcalendarsync_in_progress`) prevents overlapping syncs and self-heals after a kill. **New:** dashboard warnings for ≥`CTWPSYNC_FAILURE_WARN_THRESHOLD` (default 4) consecutive failures (`ctwpsync_consecutive_failures`/`ctwpsync_last_sync_error`) and for a sync aborted mid-run (`ctwpsync_last_run_aborted`, via shutdown handler + next-run start/finish-ts check), both only when `ctwpsync_is_configured()`; configurable log level (`log_level` ERROR/INFO/DEBUG, `CTWPSYNC_DEBUG` forces DEBUG, resolved by `ctwpsync_effective_log_level()`); in-admin log viewer (refresh/download/clear AJAX); timestamped log lines; sync-status times shown in the site timezone |
 | 1.3.6   | 2026-07-14 | Metadata: `composer.json` PHP constraint `^8.1`→`^8.2` (matches `Requires PHP: 8.2`; `^8.1` allowed a broken install on 8.1 where `readonly` classes fatal); `Tested up to` `6.3.1`→`7.0.1` |
 | 1.3.5   | 2026-07-14 | Security (dependencies): updated Guzzle stack to clear 5 Dependabot advisories — `guzzlehttp/guzzle` 7.10.0→7.14.1, `guzzlehttp/psr7` 2.8.0→2.12.5, `guzzlehttp/promises` 2.3.0→2.5.1; release ZIP installs deps from `composer.lock` at build time so the lockfile bump is the fix |
 | 1.3.4   | 2026-07-14 | Security: stored XSS prevention in event description/title (`wp_kses_post`/`sanitize_text_field`); image download restricted to real image types; SSRF hardening of admin AJAX URL params; logs moved to hardened `uploads/ctwpsync-logs/` with unguessable name + rotation + one-time migration (`CTWPSYNC_DEBUG` gates library/debug logging); fixed manually-quoted `%s` in repeating query; test scripts moved to `tests/` and excluded from build |
@@ -69,6 +70,13 @@ Settings stored in `ctwpsync_options` (array). Key fields:
 - `resourcetype_for_categories` — resource type ID for WP category mapping (-1 to disable)
 - `em_image_attr` — Events Manager custom attribute name for referencing CT image URLs
 - `enable_tag_categories` — sync CT appointment tags as WP categories
+- `log_level` — plugin log verbosity: `ERROR` / `INFO` (default) / `DEBUG`. Read at sync start in `churchtools-dosync.php` to set `SyncLogger`'s `debugEnabled`/`infoEnabled`. `CTWPSYNC_DEBUG` forces `DEBUG`. Validate with `SyncConfig::sanitizeLogLevel()`
+
+Sync-health options (standalone, not inside `ctwpsync_options`):
+- `ctwpsync_consecutive_failures` — count of consecutive failed sync cycles; incremented in the `churchtools-dosync.php` catch block, reset to 0 on success. Drives the dashboard warning (`ctwpsync_admin_notice_sync_failing`) once it reaches `CTWPSYNC_FAILURE_WARN_THRESHOLD` (default 4) and `ctwpsync_is_configured()` is true
+- `ctwpsync_last_sync_error` — `['message' => ..., 'time' => ...]` of the most recent failure, shown in the warning; deleted on success
+- `ctwpsync_last_sync_started_ts` / `ctwpsync_last_sync_finished_ts` — unix timestamps for abort detection: a run records `started_ts` at the start and `finished_ts` on any clean end (success, caught error, or clean early return). If a later run sees `started_ts > finished_ts`, the previous run was aborted (hard kill). See `ctwpsync_check_previous_run_aborted()` + shutdown handler `ctwpsync_detect_aborted_sync()`
+- `ctwpsync_last_run_aborted` — `['message' => ..., 'time' => ...]` set when an abort is detected; drives the immediate `ctwpsync_admin_notice_sync_aborted` notice (takes precedence over the consecutive-failures notice); cleared on the next successful sync
 
 ### Cron / Sync Flow
 
@@ -80,7 +88,8 @@ Settings stored in `ctwpsync_options` (array). Key fields:
 ### Logging
 
 - Plugin log lives in `wp-content/uploads/ctwpsync-logs/wpcalsync-<hash>.log` (hardened dir with `index.php`/`.htaccess`/`web.config`; `<hash>` from `wp_hash()` makes the URL unguessable). Path via `ctwpsync_log_file()`. Rotates at 5 MB keeping one `.1` generation.
-- Define `CTWPSYNC_DEBUG` (`true`) in `wp-config.php` to enable debug-level logging **and** the `churchtools-api` library's own file log (which writes fixed, non-relocatable `*.log` files into `vendor/`). Off by default.
+- Verbosity is controlled by the `log_level` setting (ERROR/INFO/DEBUG) on the settings page; read at sync start. `CTWPSYNC_DEBUG` (`true`) in `wp-config.php` forces DEBUG **and** additionally enables the `churchtools-api` library's own file log (fixed, non-relocatable `*.log` files in `vendor/`). Off by default.
+- Admin log viewer on the settings page (dashboard/dashboard_view.php "Sync Log" section) with Refresh/Download/Clear, backed by AJAX actions `ctwpsync_get_log`, `ctwpsync_clear_log`, `ctwpsync_download_log` (all nonce + `manage_options`). Tail read via `ctwpsync_read_log_tail()`.
 - `ctwpsync_migrate_logs()` (priority 4 on `plugins_loaded`) moves pre-1.3.4 logs from the plugin/vendor dirs into the new location once, guarded by the `ctwpsync_logs_migrated` option.
 
 ### ChurchTools API Library

@@ -46,6 +46,33 @@ should be addressed in future updates.
 
 ---
 
+## High Priority
+
+### Reduce the number of ChurchTools API calls per sync
+**File:** `churchtools-dosync.php` — `ctwpsync_getUpdatedCalendarEvents()` /
+`processCalendarEntry()`
+
+**Issue:** A full sync makes a large burst of API requests: the paginated
+`AppointmentRequest::forCalendars()` fetch, plus **per appointment** a
+`CombinedAppointmentRequest::forAppointment()` call, a `FileRequest::forEvent()`
+call, and an image/flyer download. Over a wide window (e.g. `import_future` of
+~13 months) across several calendars this is easily hundreds–thousands of calls
+in one run. On rate-limited ChurchTools servers this trips HTTP 429 ("Too many
+requests"), which is why sync could stall (mitigated in v1.3.7 by
+retry/backoff + a concurrency guard, but the call volume itself is unaddressed).
+
+**Recommendation (investigate later):**
+- Avoid the per-appointment `CombinedAppointmentRequest`/`FileRequest` calls
+  where the data is already available from the calendar/appointment payload, or
+  fetch files/combined data in bulk instead of one-by-one.
+- Skip image/flyer re-downloads when the CT image/flyer ID already matches the
+  stored `ct_image_id`/`ct_flyer_id` in the mapping table (only fetch on change).
+- Consider a smaller default `import_future` window and/or client-side
+  throttling between requests to stay under the rate limit proactively.
+- Measure the actual request count for a representative sync before/after.
+
+---
+
 ## Medium Priority
 
 ### Refactor Large Function

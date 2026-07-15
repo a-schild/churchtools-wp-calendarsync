@@ -12,14 +12,24 @@ use CTApi\Models\Calendars\Appointment\AppointmentRequest;
 use CTApi\Models\Calendars\CombinedAppointment\CombinedAppointmentRequest;
 use CTApi\Models\Calendars\CombinedAppointment\CombinedAppointment;
 use CTApi\Models\Common\File\FileRequest;
+use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Middleware;
+use Psr\Http\Message\ResponseInterface;
 
 // The churchtools-api library writes to fixed *.log paths inside its own
 // (web-accessible) vendor directory and offers no way to relocate them, so only
-// enable it when explicitly debugging. The plugin has its own logger below.
-$ctwpsync_debug = defined('CTWPSYNC_DEBUG') && CTWPSYNC_DEBUG;
-if ($ctwpsync_debug) {
-    CTLog::enableFileLog(); // enable library logfile (debug only)
+// enable it via the CTWPSYNC_DEBUG constant. The plugin has its own logger below.
+$ctwpsync_debug_const = defined('CTWPSYNC_DEBUG') && CTWPSYNC_DEBUG;
+if ($ctwpsync_debug_const) {
+    CTLog::enableFileLog(); // enable library logfile (constant only)
 }
+
+// Determine the plugin log level (ERROR / INFO / DEBUG, default INFO). Uses the
+// shared helper so the sync and the settings-page log panel always agree; the
+// CTWPSYNC_DEBUG constant forces DEBUG inside the helper.
+$ctwpsync_level = function_exists('ctwpsync_effective_log_level')
+    ? ctwpsync_effective_log_level()
+    : 'INFO';
 
 // Initialize logger (PHP 8.2 readonly class).
 // The log file lives in a hardened uploads subdirectory with an unguessable
@@ -30,8 +40,8 @@ $ctwpsync_logfile = function_exists('ctwpsync_log_file')
 global $ctwpsync_logger;
 $ctwpsync_logger = new SyncLogger(
     logFile: $ctwpsync_logfile,
-    debugEnabled: $ctwpsync_debug,
-    infoEnabled: true
+    debugEnabled: $ctwpsync_level === 'DEBUG',
+    infoEnabled: in_array($ctwpsync_level, ['DEBUG', 'INFO'], true),
 );
 
 global $wpdb;
@@ -78,9 +88,47 @@ if (!is_user_logged_in()) {
     return;
 }
 
+// Concurrency guard: skip this cycle if a sync is already running. A rate-limited
+// sync (with retries/backoff) can run longer than WP_CRON_LOCK_TIMEOUT (60s), so
+// wp-cron could otherwise spawn a second overlapping sync — which only makes the
+// rate limiting worse. The marker acts as a lease: it is refreshed (heartbeat)
+// while the sync makes progress, so a legitimately long sync keeps the guard held,
+// and a sync hard-killed by the host stops refreshing and the lease expires ~600s
+// after the last heartbeat — releasing the guard without any manual cleanup.
+if (get_transient('churchtools_wpcalendarsync_in_progress')) {
+    logInfo("A sync is already in progress, skipping this cycle");
+    return;
+}
+
+// Abort detection. A sync can be killed mid-run by the host (PHP execution-time
+// or memory limit, or an uncaught fatal) without ever reaching the try/catch
+// below — leaving nothing in the log. We detect that two ways:
+//   1) On the NEXT run, check whether the previous run recorded a start but no
+//      finish (covers a hard SIGKILL where the shutdown handler cannot run).
+//   2) Register a shutdown handler that fires on PHP-level fatals/timeouts and
+//      records the abort (and logs it) before the request dies.
+// $ctwpsync_run_completed is set true in both the success and catch paths, so a
+// normal end is never mistaken for an abort.
+if (function_exists('ctwpsync_check_previous_run_aborted')) {
+    ctwpsync_check_previous_run_aborted();
+}
+$GLOBALS['ctwpsync_run_completed'] = false;
+update_option('ctwpsync_last_sync_started_ts', time(), false);
+if (function_exists('ctwpsync_detect_aborted_sync')) {
+    register_shutdown_function('ctwpsync_detect_aborted_sync');
+}
+
+// UTC (WordPress runs PHP in UTC). Kept in UTC on purpose: it is compared
+// against the DB `last_seen` column in cleanupOldEntries(), which is also
+// written in UTC, so both must stay in the same timezone. Only display copies
+// are converted to the site timezone below.
 $startTimestamp = date('Y-m-d H:i:s');
-logInfo("Start sync cycle {$startTimestamp}");
-set_transient('churchtools_wpcalendarsync_in_progress', $startTimestamp, 600); // 10 min max
+logInfo("Start sync cycle"); // each log line is timestamped by the logger
+// Store the in-progress marker in the site's timezone for the admin dashboard.
+// Kept in a variable so the heartbeat below can refresh the lease without changing
+// the displayed start time.
+$inProgressMarker = get_date_from_gmt($startTimestamp, 'Y-m-d H:i:s');
+set_transient('churchtools_wpcalendarsync_in_progress', $inProgressMarker, 600); // 10 min lease
 try {
 	set_time_limit(300); // 5min to process all events
 
@@ -89,10 +137,71 @@ try {
     CTConfig::setApiKey($config->apiToken);
     CTConfig::validateConfig();
 
+    // ChurchTools enforces API rate limiting and answers HTTP 429 ("Too many
+    // requests") when a sync's burst of calls (paginated appointment fetches
+    // across several calendars) exceeds the limit. The churchtools-api library
+    // has no retry logic, so a single 429 aborts the whole sync — which is what
+    // silently stopped the cron sync. Install a Guzzle retry middleware that
+    // backs off and honours the Retry-After header, then register it as the
+    // library's shared client. The library sets http_errors=false, so a 429
+    // arrives here as a normal (fulfilled) response the decider can inspect.
+    $ctwpsync_maxRetries = 5;
+    $ctwpsync_retryStack = HandlerStack::create();
+    $ctwpsync_retryStack->push(Middleware::retry(
+        function (int $retries, $request, ?ResponseInterface $response = null, ?\Throwable $e = null) use ($ctwpsync_maxRetries): bool {
+            $status = $response?->getStatusCode();
+            $retryable = ($status === 429 || ($status !== null && $status >= 500))
+                || $e instanceof \GuzzleHttp\Exception\ConnectException;
+            if (!$retryable) {
+                return false; // success or a non-retryable error: stop
+            }
+            // Describe the reason for the log (429/5xx status, or connection error).
+            $reason = $status !== null
+                ? "HTTP {$status}" . ($status === 429 ? ' (rate limited)' : '')
+                : 'connection error' . ($e ? ': ' . $e->getMessage() : '');
+            if ($retries >= $ctwpsync_maxRetries) {
+                logError("ChurchTools API {$reason}: giving up after {$ctwpsync_maxRetries} retries");
+                return false;
+            }
+            logInfo("ChurchTools API {$reason}: retry " . ($retries + 1) . "/{$ctwpsync_maxRetries} with backoff");
+            return true;
+        },
+        function (int $retries, ?ResponseInterface $response = null): int {
+            // Honour Retry-After (delta-seconds or HTTP-date) when present, but
+            // cap it so a large value cannot blow the 5-minute cron time limit.
+            $ms = (int) (1000 * (2 ** $retries)); // default exponential: 1,2,4,8,16s
+            if ($response && $response->hasHeader('Retry-After')) {
+                $retryAfter = $response->getHeaderLine('Retry-After');
+                $seconds = is_numeric($retryAfter)
+                    ? (int) $retryAfter
+                    : max(0, (int) strtotime($retryAfter) - time());
+                if ($seconds > 0) {
+                    $ms = min($seconds, 30) * 1000; // Guzzle expects milliseconds
+                }
+            }
+            logDebug("ChurchTools API backoff: waiting " . round($ms / 1000, 1) . "s before next retry");
+            return $ms;
+        }
+    ));
+    // Bound every request so a hung ChurchTools server can never block the sync
+    // indefinitely (the library sets no timeout by default). base_uri, cookies
+    // and headers are still merged in per request from CTConfig::getRequestConfig().
+    CTClient::setClient(new CTClient([
+        'handler'         => $ctwpsync_retryStack,
+        'connect_timeout' => 10, // seconds to establish the TCP/TLS connection
+        'timeout'         => 30, // seconds for the whole request/response
+    ]));
+    logInfo("Installed ChurchTools API retry/backoff handler (max 5 retries, honours Retry-After) and per-request timeouts (connect 10s / total 30s)");
+
     // Get calendar and category mappings from config
     $calendars = $config->getCalendarIds();
     if (empty($calendars)) {
         logError("No calendars configured, doing nothing");
+        // Clean early exit, not an abort: mark this run finished so the shutdown
+        // detector below does not flag it.
+        $GLOBALS['ctwpsync_run_completed'] = true;
+        update_option('ctwpsync_last_sync_finished_ts', time(), false);
+        delete_transient('churchtools_wpcalendarsync_in_progress');
         return;
     }
     $calendars_categories_mapping = $config->getCategoryMapping();
@@ -119,6 +228,16 @@ try {
         throw $e;
     }
     foreach ($result as $key => $ctCalEntry) {
+        // Refresh the execution-time budget per appointment. Each entry can make
+        // several API calls (combined appointment, files, image download), and on
+        // a large initial sync the accumulated time would otherwise blow the
+        // 5-minute limit set above. (On Linux this counts CPU time only; on
+        // Windows it is wall-clock, so this matters most there.)
+        set_time_limit(300);
+        // Heartbeat the concurrency lease (same value, refreshed TTL) so a long
+        // sync keeps the guard held; if the host kills the process, heartbeats
+        // stop and the lease expires ~600s later, releasing the guard.
+        set_transient('churchtools_wpcalendarsync_in_progress', $inProgressMarker, 600);
         processCalendarEntry($ctCalEntry, $calendars_categories_mapping, $resourcetype_for_categories, $config);
     }
     // Now we will have to handle all wp events which are no longer visible
@@ -128,17 +247,42 @@ try {
     $endTimestamp = date('Y-m-d H:i:s');
     $sdt = new DateTime($startTimestamp);
     $edt = new DateTime($endTimestamp);
-    set_transient('churchtools_wpcalendarsync_lastupdated', "{$startTimestamp} to {$endTimestamp}", 0);
+    // Display the last-sync window in the site's timezone (values above are UTC).
+    $displayStart = get_date_from_gmt($startTimestamp, 'Y-m-d H:i:s');
+    $displayEnd = get_date_from_gmt($endTimestamp, 'Y-m-d H:i:s');
+    set_transient('churchtools_wpcalendarsync_lastupdated', "{$displayStart} to {$displayEnd}", 0);
     $interval = $edt->diff($sdt);
     set_transient('churchtools_wpcalendarsync_lastsyncduration', $interval->format('%H:%I:%S'), 0);
     delete_transient('churchtools_wpcalendarsync_in_progress');
+    // Sync completed successfully: clear the consecutive-failure streak that
+    // drives the admin dashboard warning, and any prior "aborted" warning.
+    update_option('ctwpsync_consecutive_failures', 0, false);
+    delete_option('ctwpsync_last_sync_error');
+    delete_option('ctwpsync_last_run_aborted');
+    // Mark a clean finish so the abort detector (shutdown + next-run check) knows
+    // this run ended normally.
+    $GLOBALS['ctwpsync_run_completed'] = true;
+    update_option('ctwpsync_last_sync_finished_ts', time(), false);
 } catch (Exception $e) {
     $errorMessage = $e->getMessage();
     logError($errorMessage);
     $hasError = true;
     delete_transient('churchtools_wpcalendarsync_in_progress');
+    // Record the failure so the dashboard can warn after several failed cycles.
+    // Only real sync failures reach this catch; missing-configuration cases bail
+    // out earlier with a return and never touch the counter.
+    $ctwpsync_failures = (int) get_option('ctwpsync_consecutive_failures', 0);
+    update_option('ctwpsync_consecutive_failures', $ctwpsync_failures + 1, false);
+    update_option('ctwpsync_last_sync_error', [
+        'message' => $errorMessage,
+        'time'    => current_time('mysql'), // site timezone, for admin display
+    ], false);
+    // A caught error is a completed (not aborted) run: record the finish so the
+    // abort detector does not also flag it.
+    $GLOBALS['ctwpsync_run_completed'] = true;
+    update_option('ctwpsync_last_sync_finished_ts', time(), false);
 }
-logInfo("End sync cycle " . date('Y-m-d H:i:s'));
+logInfo("End sync cycle"); // each log line is timestamped by the logger
 
 /**
  * Process a single calendar entry from ct and create or update wp event
@@ -798,7 +942,14 @@ function downloadEventImage(string $fileURL, string $fileName, int $postID, \Dat
 		logDebug("File not existing: ".$fullFilename);
 	}
 
-	$fileContent = @file_get_contents($fileURL);
+	// Bound the download so a slow/hung image URL can't stall the whole sync
+	// (plain file_get_contents would otherwise wait up to default_socket_timeout,
+	// 60s, per image — costly on a large initial sync with many images).
+	$downloadContext = stream_context_create([
+		'http' => ['timeout' => 30],
+		'https' => ['timeout' => 30],
+	]);
+	$fileContent = @file_get_contents($fileURL, false, $downloadContext);
 	if ($fileContent === false) {
 		logError("Failed to download image from " . $fileURL);
 		return null;
