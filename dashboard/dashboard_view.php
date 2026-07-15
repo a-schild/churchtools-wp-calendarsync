@@ -709,8 +709,8 @@ jQuery(document).ready(function($) {
 		out: '#ctwpsync_dedupe_result',
 		buttons: '#ctwpsync_dedupe_scan, #ctwpsync_dedupe_run',
 		fields: [
-			{ key: 'images', label: 'ChurchTools images checked' },
-			{ key: 'dupe_groups', label: 'Images with duplicates' },
+			{ key: 'images', label: 'Image sets checked' },
+			{ key: 'dupe_groups', label: 'Duplicate sets found' },
 			{ key: 'events_repointed', label: 'Events re-pointed' },
 			{ key: 'attachments_deleted', label: 'Duplicate attachments' },
 			{ key: 'skipped', label: 'Skipped (used elsewhere)' }

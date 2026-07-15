@@ -7,3 +7,7 @@ composer.phar
 /wpcalsync.log
 /nbproject/private/
 /.idea/
+
+# Locally-built release artifacts
+/churchtools-wp-sync-*.zip
+/build/

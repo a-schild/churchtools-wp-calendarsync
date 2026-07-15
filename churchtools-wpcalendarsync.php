@@ -550,20 +550,23 @@ function ctwpsync_download_log_callback(): void {
  * Collapse duplicate event-image attachments created before the
  * `_ctwpsync_ct_image_id` de-duplication existed.
  *
- * Older versions re-downloaded and re-uploaded the same ChurchTools image for every
- * event / repeating occurrence, so WordPress produced `name-1.jpg`, `name-2.jpg`, …
- * copies (each with a full set of generated thumbnails). For each CT image id in the
- * mapping table this routine:
- *   - picks the lowest attachment id currently used by those events as the canonical
- *     (the original upload),
- *   - stamps it with `_ctwpsync_ct_image_id` so future syncs reuse it,
- *   - re-points every event's featured image and the mapping's `wp_image_id` to it,
- *   - deletes the now-redundant duplicate attachments (files + thumbnails), but only
- *     when nothing outside this event group still references them.
+ * Older versions re-downloaded and re-uploaded the same ChurchTools image, so
+ * WordPress produced `name-1.jpg`, `name-2.jpg`, … copies (each with a full set of
+ * generated sub-sizes). Most copies are now *orphaned* — the event points only at the
+ * most recent one — so they cannot be found through the event→thumbnail mapping (which
+ * is why the old mapping-only scan reported nothing). This routine instead:
+ *   - starts from every image attachment the plugin is responsible for (stamped with
+ *     `_ctwpsync_ct_image_id`, recorded in the mapping's `wp_image_id`, or currently a
+ *     synced event's featured image),
+ *   - for each, finds sibling attachments whose uploaded file shares the same base name
+ *     in the same folder (WordPress' `-N` / `-scaled` variants),
+ *   - confirms they are byte-identical (md5 of the actual file) so unrelated images
+ *     that merely share a name are never merged,
+ *   - keeps the lowest attachment id as the canonical copy, re-points every featured
+ *     image and the mapping's `wp_image_id` to it, and deletes the redundant copies
+ *     (files + sub-sizes) — skipping any copy whose URL still appears in post content.
  *
- * Only attachments that are (or were) an event's featured image are considered — fully
- * orphaned leftover files that are nobody's thumbnail are left alone (clean those via
- * the Media Library "Unattached" filter). EM must be active (hard dependency).
+ * EM must be active (hard dependency).
  *
  * @param bool $dryRun When true, report what would change but make no changes.
  * @return array{images:int,dupe_groups:int,events_repointed:int,attachments_deleted:int,skipped:int,errors:array<int,string>}
@@ -586,107 +589,199 @@ function ctwpsync_dedupe_images(bool $dryRun = true): array {
 		return $stats;
 	}
 
-	$rows = $wpdb->get_results(
-		"SELECT ct_image_id, wp_id FROM `{$tablename}` WHERE ct_image_id IS NOT NULL AND ct_image_id > 0"
-	);
-	if (!$rows) {
+	// 1. Collect the image attachments this plugin is responsible for.
+	$pluginAtts = [];
+
+	// a) attachments stamped by the current sync code
+	$stamped = get_posts([
+		'post_type'      => 'attachment',
+		'post_status'    => 'any',
+		'posts_per_page' => -1,
+		'fields'         => 'ids',
+		'meta_key'       => '_ctwpsync_ct_image_id',
+	]);
+	foreach ($stamped as $id) {
+		$pluginAtts[(int) $id] = true;
+	}
+
+	// b) attachments recorded in the mapping
+	$mapImgIds = $wpdb->get_col("SELECT DISTINCT wp_image_id FROM `{$tablename}` WHERE wp_image_id IS NOT NULL AND wp_image_id > 0");
+	foreach ($mapImgIds as $id) {
+		$pluginAtts[(int) $id] = true;
+	}
+
+	// c) current featured image of every synced event (also remember which CT image id
+	//    that attachment belongs to, so the surviving copy can be stamped for reuse).
+	$attToCtImage = [];
+	$eventRows = $wpdb->get_results("SELECT wp_id, ct_image_id FROM `{$tablename}` WHERE wp_id IS NOT NULL AND wp_id > 0");
+	foreach ($eventRows as $er) {
+		$ev = em_get_event((int) $er->wp_id);
+		if ($ev && !empty($ev->ID)) {
+			$thumb = (int) get_post_thumbnail_id((int) $ev->ID);
+			if ($thumb > 0) {
+				$pluginAtts[$thumb] = true;
+				if (!empty($er->ct_image_id) && $er->ct_image_id > 0 && !isset($attToCtImage[$thumb])) {
+					$attToCtImage[$thumb] = (int) $er->ct_image_id;
+				}
+			}
+		}
+	}
+
+	if (!$pluginAtts) {
 		return $stats;
 	}
 
-	// Group mapped events by the ChurchTools image id they use.
-	$byImage = [];
-	foreach ($rows as $r) {
-		$byImage[(int) $r->ct_image_id][] = (int) $r->wp_id;
+	$uploadBase = wp_get_upload_dir()['basedir'];
+
+	// 2. Reduce those attachments to distinct "base file" keys, stripping WordPress'
+	//    -scaled and -N suffixes (e.g. 2026/11/pic-1-scaled.jpg -> 2026/11/pic + jpg).
+	$baseKeys = [];
+	foreach (array_keys($pluginAtts) as $attId) {
+		$file = get_post_meta($attId, '_wp_attached_file', true);
+		if (!$file || !is_string($file)) {
+			continue;
+		}
+		$dir  = dirname($file);
+		$dir  = ($dir === '.' || $dir === '') ? '' : $dir;
+		$ext  = pathinfo($file, PATHINFO_EXTENSION);
+		$name = pathinfo($file, PATHINFO_FILENAME);
+		$name = preg_replace('/-scaled$/', '', $name);
+		$name = preg_replace('/-\d+$/', '', $name);
+		if ($name === '' || $ext === '') {
+			continue;
+		}
+		$key = $dir . '|' . $name . '|' . strtolower($ext);
+		$baseKeys[$key] = ['dir' => $dir, 'base' => $name, 'ext' => $ext];
 	}
 
-	foreach ($byImage as $ctImageId => $emEventIds) {
+	// 3. For each base key, gather sibling attachments, confirm identical files, collapse.
+	foreach ($baseKeys as $info) {
 		$stats['images']++;
+		$dir  = $info['dir'];
+		$base = $info['base'];
+		$ext  = $info['ext'];
 
-		// Resolve each event to its post id and current featured-image attachment.
-		$postThumbs = [];   // postId => current thumbnail attachment id
-		$attSet     = [];   // distinct attachment ids used across this group
-		foreach (array_unique($emEventIds) as $emId) {
-			$ev = em_get_event($emId);
-			if (!$ev || empty($ev->ID)) {
+		$likePrefix = ($dir === '' ? '' : $dir . '/') . $base;
+		$rows = $wpdb->get_results($wpdb->prepare(
+			"SELECT post_id, meta_value FROM {$wpdb->postmeta} WHERE meta_key = '_wp_attached_file' AND meta_value LIKE %s",
+			$wpdb->esc_like($likePrefix) . '%'
+		));
+		if (!$rows) {
+			continue;
+		}
+
+		// Keep only real attachments whose file is exactly base(-N)?(-scaled)?.ext
+		$pattern = '#^' . preg_quote($likePrefix, '#') . '(-\d+)?(-scaled)?\.' . preg_quote($ext, '#') . '$#i';
+		$candidates = [];
+		foreach ($rows as $r) {
+			if (preg_match($pattern, $r->meta_value) && get_post_type((int) $r->post_id) === 'attachment') {
+				$candidates[(int) $r->post_id] = $r->meta_value;
+			}
+		}
+		if (count($candidates) <= 1) {
+			continue;
+		}
+
+		// Group byte-identical files so unrelated images sharing a name aren't merged.
+		$byHash = [];
+		foreach ($candidates as $attId => $rel) {
+			$abs = rtrim($uploadBase, '/\\') . '/' . $rel;
+			if (!is_file($abs)) {
 				continue;
 			}
-			$postId = (int) $ev->ID;
-			$thumb  = (int) get_post_thumbnail_id($postId);
-			$postThumbs[$postId] = $thumb;
-			if ($thumb > 0) {
-				$attSet[$thumb] = true;
+			$hash = @md5_file($abs);
+			if ($hash === false) {
+				continue;
 			}
+			$byHash[$hash][] = (int) $attId;
 		}
 
-		$attachmentIds = array_keys($attSet);
-		$canonical     = $attachmentIds ? min($attachmentIds) : 0;
-		if ($canonical <= 0) {
-			continue; // no featured image in use for this CT image
-		}
+		foreach ($byHash as $attIds) {
+			if (count($attIds) <= 1) {
+				continue;
+			}
+			sort($attIds);
+			$canonical = (int) $attIds[0];
+			$dupes     = array_slice($attIds, 1);
+			$stats['dupe_groups']++;
 
-		// Even a group with a single attachment gets stamped so future syncs dedupe.
-		if (!$dryRun) {
-			update_post_meta($canonical, '_ctwpsync_ct_image_id', $ctImageId);
-		}
-
-		if (count($attachmentIds) <= 1) {
-			// Nothing duplicated, but still make sure the mapping records wp_image_id.
-			if (!$dryRun) {
+			// Determine the CT image id for this group: an existing stamp on any member,
+			// else the mapping's ct_image_id for whichever member is a synced event's
+			// featured image. Stamp the canonical so future re-adds reuse it.
+			$ctImageId = null;
+			foreach ($attIds as $a) {
+				$v = get_post_meta($a, '_ctwpsync_ct_image_id', true);
+				if ($v !== '' && $v !== false && $v !== null) {
+					$ctImageId = (int) $v;
+					break;
+				}
+			}
+			if ($ctImageId === null) {
+				foreach ($attIds as $a) {
+					if (isset($attToCtImage[$a])) {
+						$ctImageId = $attToCtImage[$a];
+						break;
+					}
+				}
+			}
+			if (!$dryRun && $ctImageId !== null) {
+				update_post_meta($canonical, '_ctwpsync_ct_image_id', $ctImageId);
 				$wpdb->query($wpdb->prepare(
 					"UPDATE `{$tablename}` SET wp_image_id = %d WHERE ct_image_id = %d",
 					$canonical, $ctImageId
 				));
 			}
-			continue;
-		}
 
-		$stats['dupe_groups']++;
-		$groupPostIds = array_keys($postThumbs);
-
-		// Re-point every event that isn't already using the canonical attachment.
-		foreach ($postThumbs as $postId => $thumb) {
-			if ($thumb !== $canonical) {
-				if (!$dryRun) {
-					set_post_thumbnail($postId, $canonical);
+			foreach ($dupes as $dupeId) {
+				// Re-point featured images that point at this duplicate.
+				$featuredPosts = get_posts([
+					'post_type'      => 'any',
+					'post_status'    => 'any',
+					'posts_per_page' => -1,
+					'fields'         => 'ids',
+					'meta_key'       => '_thumbnail_id',
+					'meta_value'     => $dupeId,
+				]);
+				foreach ($featuredPosts as $p) {
+					if (!$dryRun) {
+						set_post_thumbnail((int) $p, $canonical);
+					}
+					$stats['events_repointed']++;
 				}
-				$stats['events_repointed']++;
-			}
-		}
-		if (!$dryRun) {
-			$wpdb->query($wpdb->prepare(
-				"UPDATE `{$tablename}` SET wp_image_id = %d WHERE ct_image_id = %d",
-				$canonical, $ctImageId
-			));
-		}
 
-		// Delete the redundant duplicates, unless a post outside this group still
-		// uses one as its featured image.
-		foreach ($attachmentIds as $attId) {
-			if ($attId === $canonical) {
-				continue;
-			}
-			$referencingPosts = get_posts([
-				'post_type'      => 'any',
-				'post_status'    => 'any',
-				'posts_per_page' => -1,
-				'fields'         => 'ids',
-				'meta_key'       => '_thumbnail_id',
-				'meta_value'     => $attId,
-			]);
-			$externalUse = array_diff($referencingPosts, $groupPostIds);
-			if (!empty($externalUse)) {
-				$stats['skipped']++;
-				$stats['errors'][] = "Attachment {$attId} left in place: still used by post(s) " . implode(',', $externalUse);
-				continue;
-			}
-			if (!$dryRun) {
-				$deleted = wp_delete_attachment($attId, true);
-				if (!$deleted) {
-					$stats['errors'][] = "Failed to delete attachment {$attId}";
+				// Re-point the mapping's wp_image_id, and record the canonical.
+				if (!$dryRun) {
+					$wpdb->query($wpdb->prepare(
+						"UPDATE `{$tablename}` SET wp_image_id = %d WHERE wp_image_id = %d",
+						$canonical, $dupeId
+					));
+				}
+
+				// If the duplicate's URL is embedded in post content, leave it in place
+				// rather than risk a broken link (sized-variant URLs make a safe rewrite
+				// unreliable). Report it as skipped.
+				$dupeUrl   = wp_get_attachment_url($dupeId);
+				$inContent = [];
+				if ($dupeUrl) {
+					$inContent = $wpdb->get_col($wpdb->prepare(
+						"SELECT ID FROM {$wpdb->posts} WHERE post_status != 'trash' AND post_content LIKE %s",
+						'%' . $wpdb->esc_like($dupeUrl) . '%'
+					));
+				}
+				if (!empty($inContent)) {
+					$stats['skipped']++;
+					$stats['errors'][] = "Attachment {$dupeId} left in place: its URL appears in post(s) " . implode(',', $inContent);
 					continue;
 				}
+
+				if (!$dryRun) {
+					if (!wp_delete_attachment($dupeId, true)) {
+						$stats['errors'][] = "Failed to delete attachment {$dupeId}";
+						continue;
+					}
+				}
+				$stats['attachments_deleted']++;
 			}
-			$stats['attachments_deleted']++;
 		}
 	}
 
