@@ -326,6 +326,7 @@ function processCalendarEntry(
 			$ct_flyer_id= null; // CT file id of flyer
 			$wp_flyer_id= null; // WP flyer attachment id
 			$newCtImageID= null;
+			$newWPImageID= null;
 			$newCTFlyerId= null;
 			$newWPFlyerId= null;
 			// logDebug(serialize($result));
@@ -477,26 +478,41 @@ function processCalendarEntry(
 									if ($ctFile->getId() == $ct_flyer_id && $wp_flyer_id != null) {
 										// Already found and mapped
 										logDebug("Found flyer already attached ".$ctFile->getId()." ct_flyer_id ". $ct_flyer_id . " and wp_flyer_id ".$wp_flyer_id);
+										// Backfill the CT-file-id stamp so future syncs of other
+										// events can find and reuse this single attachment.
+										update_post_meta($wp_flyer_id, '_ctwpsync_ct_flyer_id', $ctFile->getId());
 										$event->post_content= addFlyerLink($event->post_content, $wp_flyer_id);
 									} else {
-										// Download from CT and add to media library
-										$tmpFlyer= sys_get_temp_dir().DIRECTORY_SEPARATOR.$ctFile->getId();
-										if (!is_dir($tmpFlyer)) {
-											mkdir($tmpFlyer);
-										}
-										$fileResult= $ctFile->downloadToPath($tmpFlyer);
-										$safeFileName= sanitize_file_name(basename($ctFile->getName()));
-										$tmpFlyerFile= $tmpFlyer. DIRECTORY_SEPARATOR . $safeFileName;
-										logInfo("Downloaded to ".$fileResult." ".$tmpFlyerFile);
-										// TODO: Check if we already have this file in WP, otherwise upload it
-										// Then attach a link to the file to the event content
-										// media_handle_sideload see below
 										$newCTFlyerId= $ctFile->getId();
-										$newWPFlyerId= uploadFromLocalFile($tmpFlyerFile, $ctFile->getName(), null, null, $sDate->format('Y/m'));
-										if ($newWPFlyerId) {
+										// Library-wide de-duplication: if this CT file was already
+										// imported (by any event / repeating occurrence), reuse that
+										// single shared attachment instead of sideloading a fresh copy
+										// (which media_handle_sideload would rename to flyer-1.pdf, ...).
+										$existingFlyer= get_attachment_id_by_ct_flyer_id($newCTFlyerId);
+										if ($existingFlyer) {
+											logDebug("Reusing existing flyer attachment ".$existingFlyer." for CT file id ".$newCTFlyerId.", skipping download");
+											$newWPFlyerId= $existingFlyer;
 											$event->post_content= addFlyerLink($event->post_content, $newWPFlyerId);
 										} else {
-											logError("Error in media wp upload");
+											// Download from CT and add to media library
+											$tmpFlyer= sys_get_temp_dir().DIRECTORY_SEPARATOR.$ctFile->getId();
+											if (!is_dir($tmpFlyer)) {
+												mkdir($tmpFlyer);
+											}
+											$fileResult= $ctFile->downloadToPath($tmpFlyer);
+											$safeFileName= sanitize_file_name(basename($ctFile->getName()));
+											$tmpFlyerFile= $tmpFlyer. DIRECTORY_SEPARATOR . $safeFileName;
+											logInfo("Downloaded to ".$fileResult." ".$tmpFlyerFile);
+											// Then attach a link to the file to the event content
+											// media_handle_sideload see below
+											$newWPFlyerId= uploadFromLocalFile($tmpFlyerFile, $ctFile->getName(), null, null, $sDate->format('Y/m'));
+											if ($newWPFlyerId) {
+												// Stamp the CT file id for future reuse (see above).
+												update_post_meta($newWPFlyerId, '_ctwpsync_ct_flyer_id', $newCTFlyerId);
+												$event->post_content= addFlyerLink($event->post_content, $newWPFlyerId);
+											} else {
+												logError("Error in media wp upload");
+											}
 										}
 									}
 									// Only the first attachment with Flyer in the name
@@ -613,9 +629,10 @@ function processCalendarEntry(
 				));
 
 				if ( $imageURL != null && empty( $img_attr_name ) ) {
-					// image embedding is disabled, download the image
-					$attachmentID = downloadEventImage( $imageURL, $imageName, $event->ID, $sDate, $config->url );
-					logDebug("Attached image ".$imageName." from ".$imageURL." as attachement ".$attachmentID);
+					// image embedding is disabled, download the image (or reuse a
+					// previously-imported attachment for the same CT image id)
+					$newWPImageID = downloadEventImage( $imageURL, $imageName, $event->ID, $sDate, $config->url, $newCtImageID );
+					logDebug("Attached image ".$imageName." from ".$imageURL." as attachement ".$newWPImageID);
 				}
 				if ($addMode) {
 					// Keeps track of ct event id and wp event id for subsequent updates+deletions
@@ -623,6 +640,7 @@ function processCalendarEntry(
 						'ct_id' => $ctCalEntry->getId(),
 						'wp_id' => $event->event_id,
 						'ct_image_id' => $newCtImageID,
+						'wp_image_id' => $newWPImageID,
 						'ct_flyer_id' => $newCTFlyerId,
 						'wp_flyer_id' => $newWPFlyerId,
 						'last_seen' => date('Y-m-d H:i:s'),
@@ -640,6 +658,10 @@ function processCalendarEntry(
 
 					if ($newCtImageID != null) {
 						$updateData['ct_image_id'] = $newCtImageID;
+						$updateFormat[] = '%d';
+					}
+					if ($newWPImageID != null) {
+						$updateData['wp_image_id'] = $newWPImageID;
 						$updateFormat[] = '%d';
 					}
 					if ($newCTFlyerId != null) {
@@ -911,13 +933,29 @@ function cleanupOldEntries(string $startDate, string $processingStart): void {
  * @param int $postID WordPress post ID to attach to
  * @param \DateTime $eventDate Event date for organizing uploads
  * @param string $ctBaseUrl Expected ChurchTools base URL for SSRF protection
+ * @param int|null $ctImageId ChurchTools file id of the image, used for library-wide de-duplication
  * @return int|null Attachment ID or null on failure
  */
-function downloadEventImage(string $fileURL, string $fileName, int $postID, \DateTime $eventDate, string $ctBaseUrl = ''): ?int {
+function downloadEventImage(string $fileURL, string $fileName, int $postID, \DateTime $eventDate, string $ctBaseUrl = '', ?int $ctImageId = null): ?int {
 	if (!empty($ctBaseUrl) && !str_starts_with($fileURL, $ctBaseUrl)) {
 		logError("Refused to download image from untrusted URL: " . $fileURL);
 		return null;
 	}
+
+	// Primary de-duplication: if this ChurchTools image has already been imported
+	// (as any attachment, in any month folder), reuse that single shared attachment
+	// instead of downloading a fresh copy. This prevents WordPress from creating
+	// "name-1.jpg", "name-2.jpg", ... duplicates (each with a full set of thumbnails)
+	// when the same CT image is used by many events / repeating occurrences.
+	if ($ctImageId !== null) {
+		$existingId = get_attachment_id_by_ct_image_id($ctImageId);
+		if ($existingId) {
+			logDebug("Reusing existing attachment {$existingId} for CT image id {$ctImageId}, skipping download");
+			set_post_thumbnail( $postID, $existingId );
+			return $existingId;
+		}
+	}
+
 	$uploadPart= $eventDate->format('Y/m');
 	// Get upload dir
 	$upload_dir    = wp_upload_dir();
@@ -994,6 +1032,11 @@ function downloadEventImage(string $fileURL, string $fileName, int $postID, \Dat
 
          wp_update_attachment_metadata( $attachment_id,  $attachment_data );
          set_post_thumbnail( $postID, $attachment_id );
+         // Stamp the CT image id so future syncs can find and reuse this single
+         // attachment (see get_attachment_id_by_ct_image_id / the dedup guard above).
+         if ( $ctImageId !== null ) {
+            update_post_meta( $attachment_id, '_ctwpsync_ct_image_id', $ctImageId );
+         }
        }
     } else {
 		logError("Error in file upload: " . ($upload_file['error'] ?? json_encode($upload_file)));
@@ -1194,6 +1237,61 @@ function get_attachment_id_by_filename(string $subPath, string $filename): int|f
     ]);
     
     return $query->posts ? $query->posts[0] : false;
+}
+
+/**
+ * Get the attachment ID for a previously-imported ChurchTools image by its CT file id.
+ *
+ * Attachments imported by this plugin are stamped with a `_ctwpsync_ct_image_id`
+ * meta value (see downloadEventImage). Looking images up by that id — rather than by
+ * filename/path — lets a single attachment be shared across every event that uses the
+ * same CT image, regardless of upload month, and prevents "name-1/-2" re-uploads.
+ *
+ * @param int $ctImageId ChurchTools file id of the image
+ * @return int|false Attachment ID or false if not found
+ */
+function get_attachment_id_by_ct_image_id(int $ctImageId): int|false {
+    $query = new WP_Query([
+        'post_type' => 'attachment',
+        'post_status' => 'inherit',
+        'meta_query' => [
+            [
+                'key' => '_ctwpsync_ct_image_id',
+                'value' => $ctImageId,
+                'compare' => '='
+            ]
+        ],
+        'posts_per_page' => 1,
+        'fields' => 'ids'
+    ]);
+
+    return $query->posts ? (int) $query->posts[0] : false;
+}
+
+/**
+ * Get the attachment ID for a previously-imported ChurchTools event file (flyer) by
+ * its CT file id. Parallels get_attachment_id_by_ct_image_id but uses a separate meta
+ * key, since event-file ids and appointment-image ids are different id spaces.
+ *
+ * @param int $ctFlyerId ChurchTools file id of the flyer
+ * @return int|false Attachment ID or false if not found
+ */
+function get_attachment_id_by_ct_flyer_id(int $ctFlyerId): int|false {
+    $query = new WP_Query([
+        'post_type' => 'attachment',
+        'post_status' => 'inherit',
+        'meta_query' => [
+            [
+                'key' => '_ctwpsync_ct_flyer_id',
+                'value' => $ctFlyerId,
+                'compare' => '='
+            ]
+        ],
+        'posts_per_page' => 1,
+        'fields' => 'ids'
+    ]);
+
+    return $query->posts ? (int) $query->posts[0] : false;
 }
 
 /**

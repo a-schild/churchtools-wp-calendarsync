@@ -547,6 +547,349 @@ function ctwpsync_download_log_callback(): void {
 }
 
 /**
+ * Collapse duplicate event-image attachments created before the
+ * `_ctwpsync_ct_image_id` de-duplication existed.
+ *
+ * Older versions re-downloaded and re-uploaded the same ChurchTools image for every
+ * event / repeating occurrence, so WordPress produced `name-1.jpg`, `name-2.jpg`, …
+ * copies (each with a full set of generated thumbnails). For each CT image id in the
+ * mapping table this routine:
+ *   - picks the lowest attachment id currently used by those events as the canonical
+ *     (the original upload),
+ *   - stamps it with `_ctwpsync_ct_image_id` so future syncs reuse it,
+ *   - re-points every event's featured image and the mapping's `wp_image_id` to it,
+ *   - deletes the now-redundant duplicate attachments (files + thumbnails), but only
+ *     when nothing outside this event group still references them.
+ *
+ * Only attachments that are (or were) an event's featured image are considered — fully
+ * orphaned leftover files that are nobody's thumbnail are left alone (clean those via
+ * the Media Library "Unattached" filter). EM must be active (hard dependency).
+ *
+ * @param bool $dryRun When true, report what would change but make no changes.
+ * @return array{images:int,dupe_groups:int,events_repointed:int,attachments_deleted:int,skipped:int,errors:array<int,string>}
+ */
+function ctwpsync_dedupe_images(bool $dryRun = true): array {
+	global $wpdb;
+	$tablename = $wpdb->prefix . 'ctwpsync_mapping';
+
+	$stats = [
+		'images'              => 0,
+		'dupe_groups'         => 0,
+		'events_repointed'    => 0,
+		'attachments_deleted' => 0,
+		'skipped'             => 0,
+		'errors'              => [],
+	];
+
+	if (!function_exists('em_get_event')) {
+		$stats['errors'][] = 'Events Manager is not active.';
+		return $stats;
+	}
+
+	$rows = $wpdb->get_results(
+		"SELECT ct_image_id, wp_id FROM `{$tablename}` WHERE ct_image_id IS NOT NULL AND ct_image_id > 0"
+	);
+	if (!$rows) {
+		return $stats;
+	}
+
+	// Group mapped events by the ChurchTools image id they use.
+	$byImage = [];
+	foreach ($rows as $r) {
+		$byImage[(int) $r->ct_image_id][] = (int) $r->wp_id;
+	}
+
+	foreach ($byImage as $ctImageId => $emEventIds) {
+		$stats['images']++;
+
+		// Resolve each event to its post id and current featured-image attachment.
+		$postThumbs = [];   // postId => current thumbnail attachment id
+		$attSet     = [];   // distinct attachment ids used across this group
+		foreach (array_unique($emEventIds) as $emId) {
+			$ev = em_get_event($emId);
+			if (!$ev || empty($ev->ID)) {
+				continue;
+			}
+			$postId = (int) $ev->ID;
+			$thumb  = (int) get_post_thumbnail_id($postId);
+			$postThumbs[$postId] = $thumb;
+			if ($thumb > 0) {
+				$attSet[$thumb] = true;
+			}
+		}
+
+		$attachmentIds = array_keys($attSet);
+		$canonical     = $attachmentIds ? min($attachmentIds) : 0;
+		if ($canonical <= 0) {
+			continue; // no featured image in use for this CT image
+		}
+
+		// Even a group with a single attachment gets stamped so future syncs dedupe.
+		if (!$dryRun) {
+			update_post_meta($canonical, '_ctwpsync_ct_image_id', $ctImageId);
+		}
+
+		if (count($attachmentIds) <= 1) {
+			// Nothing duplicated, but still make sure the mapping records wp_image_id.
+			if (!$dryRun) {
+				$wpdb->query($wpdb->prepare(
+					"UPDATE `{$tablename}` SET wp_image_id = %d WHERE ct_image_id = %d",
+					$canonical, $ctImageId
+				));
+			}
+			continue;
+		}
+
+		$stats['dupe_groups']++;
+		$groupPostIds = array_keys($postThumbs);
+
+		// Re-point every event that isn't already using the canonical attachment.
+		foreach ($postThumbs as $postId => $thumb) {
+			if ($thumb !== $canonical) {
+				if (!$dryRun) {
+					set_post_thumbnail($postId, $canonical);
+				}
+				$stats['events_repointed']++;
+			}
+		}
+		if (!$dryRun) {
+			$wpdb->query($wpdb->prepare(
+				"UPDATE `{$tablename}` SET wp_image_id = %d WHERE ct_image_id = %d",
+				$canonical, $ctImageId
+			));
+		}
+
+		// Delete the redundant duplicates, unless a post outside this group still
+		// uses one as its featured image.
+		foreach ($attachmentIds as $attId) {
+			if ($attId === $canonical) {
+				continue;
+			}
+			$referencingPosts = get_posts([
+				'post_type'      => 'any',
+				'post_status'    => 'any',
+				'posts_per_page' => -1,
+				'fields'         => 'ids',
+				'meta_key'       => '_thumbnail_id',
+				'meta_value'     => $attId,
+			]);
+			$externalUse = array_diff($referencingPosts, $groupPostIds);
+			if (!empty($externalUse)) {
+				$stats['skipped']++;
+				$stats['errors'][] = "Attachment {$attId} left in place: still used by post(s) " . implode(',', $externalUse);
+				continue;
+			}
+			if (!$dryRun) {
+				$deleted = wp_delete_attachment($attId, true);
+				if (!$deleted) {
+					$stats['errors'][] = "Failed to delete attachment {$attId}";
+					continue;
+				}
+			}
+			$stats['attachments_deleted']++;
+		}
+	}
+
+	return $stats;
+}
+
+/**
+ * AJAX: scan for (dry run) or perform the event-image de-duplication.
+ * Pass `confirm=1` to actually apply changes; otherwise it only reports.
+ */
+add_action('wp_ajax_ctwpsync_dedupe_images', 'ctwpsync_dedupe_images_callback');
+function ctwpsync_dedupe_images_callback(): void {
+	if (!wp_verify_nonce($_POST['nonce'] ?? '', 'ctwpsync_validate')) {
+		wp_send_json_error('Security check failed');
+	}
+	if (!current_user_can('manage_options')) {
+		wp_send_json_error('Permission denied');
+	}
+	@set_time_limit(300);
+	$dryRun = (($_POST['confirm'] ?? '') !== '1');
+	$stats  = ctwpsync_dedupe_images($dryRun);
+	$stats['dry_run'] = $dryRun;
+	wp_send_json_success($stats);
+}
+
+/**
+ * Collapse duplicate flyer (event-file) attachments created before the
+ * `_ctwpsync_ct_flyer_id` de-duplication existed.
+ *
+ * Unlike images, flyers are not featured images — they are embedded as `<a href>`
+ * links in each event's post_content (see addFlyerLink). So for each ChurchTools
+ * flyer id referenced by the mapping this routine:
+ *   - picks the lowest still-existing attachment id as the canonical copy,
+ *   - stamps it with `_ctwpsync_ct_flyer_id` so future syncs reuse it,
+ *   - rewrites the duplicate's URL to the canonical URL in the content of every
+ *     event that used it, and sets the mapping's `wp_flyer_id` to the canonical,
+ *   - deletes the redundant duplicate attachments — but only once nothing (any post
+ *     content or featured-image reference) still points at them, so no link is left
+ *     dangling.
+ *
+ * Editing published post content is higher-risk than the image cleanup; run the dry
+ * run first and back up. EM must be active (hard dependency).
+ *
+ * @param bool $dryRun When true, report what would change but make no changes.
+ * @return array{flyers:int,dupe_groups:int,events_rewritten:int,attachments_deleted:int,skipped:int,errors:array<int,string>}
+ */
+function ctwpsync_dedupe_flyers(bool $dryRun = true): array {
+	global $wpdb;
+	$tablename = $wpdb->prefix . 'ctwpsync_mapping';
+
+	$stats = [
+		'flyers'              => 0,
+		'dupe_groups'         => 0,
+		'events_rewritten'    => 0,
+		'attachments_deleted' => 0,
+		'skipped'             => 0,
+		'errors'              => [],
+	];
+
+	if (!function_exists('em_get_event')) {
+		$stats['errors'][] = 'Events Manager is not active.';
+		return $stats;
+	}
+
+	$rows = $wpdb->get_results(
+		"SELECT ct_flyer_id, wp_id, wp_flyer_id FROM `{$tablename}` WHERE ct_flyer_id IS NOT NULL AND ct_flyer_id > 0 AND wp_flyer_id IS NOT NULL AND wp_flyer_id > 0"
+	);
+	if (!$rows) {
+		return $stats;
+	}
+
+	// Group by CT flyer id: flyer attachment id => list of post ids that link it.
+	$byFlyer = []; // ctFlyerId => [ wpFlyerAttId => [postId, ...] ]
+	foreach ($rows as $r) {
+		$ev = em_get_event((int) $r->wp_id);
+		if (!$ev || empty($ev->ID)) {
+			continue;
+		}
+		$byFlyer[(int) $r->ct_flyer_id][(int) $r->wp_flyer_id][] = (int) $ev->ID;
+	}
+
+	foreach ($byFlyer as $ctFlyerId => $attMap) {
+		$stats['flyers']++;
+
+		// Keep only attachment ids that still exist.
+		$existingAtts = [];
+		foreach (array_keys($attMap) as $attId) {
+			if (get_post($attId)) {
+				$existingAtts[] = (int) $attId;
+			}
+		}
+		if (!$existingAtts) {
+			continue;
+		}
+		$canonical    = min($existingAtts);
+		$canonicalUrl = wp_get_attachment_url($canonical);
+
+		// All post ids in this group (used to scope the "referenced elsewhere" guard).
+		$groupPostIds = [];
+		foreach ($attMap as $postIds) {
+			$groupPostIds = array_merge($groupPostIds, $postIds);
+		}
+		$groupPostIds = array_values(array_unique($groupPostIds));
+
+		if (!$dryRun) {
+			update_post_meta($canonical, '_ctwpsync_ct_flyer_id', $ctFlyerId);
+			$wpdb->query($wpdb->prepare(
+				"UPDATE `{$tablename}` SET wp_flyer_id = %d WHERE ct_flyer_id = %d",
+				$canonical, $ctFlyerId
+			));
+		}
+
+		// A group with a single attachment has no duplicates to collapse.
+		if (count($existingAtts) <= 1) {
+			continue;
+		}
+		$stats['dupe_groups']++;
+
+		foreach ($attMap as $attId => $postIds) {
+			$attId = (int) $attId;
+			if ($attId === $canonical || !in_array($attId, $existingAtts, true)) {
+				continue;
+			}
+			$oldUrl = wp_get_attachment_url($attId);
+
+			// Rewrite this duplicate's URL to the canonical URL in each event's content.
+			if ($oldUrl && $canonicalUrl) {
+				foreach (array_unique($postIds) as $postId) {
+					$post = get_post($postId);
+					if (!$post || strpos($post->post_content, $oldUrl) === false) {
+						continue;
+					}
+					if (!$dryRun) {
+						$newContent = str_replace($oldUrl, $canonicalUrl, $post->post_content);
+						wp_update_post(['ID' => $postId, 'post_content' => $newContent]);
+					}
+					$stats['events_rewritten']++;
+				}
+			}
+
+			// Only delete once the old attachment is referenced nowhere. Check post
+			// content (its URL) and featured-image use. In a dry run the content has
+			// not been rewritten yet, so discount this group's own posts.
+			$contentRefs = $oldUrl ? $wpdb->get_col($wpdb->prepare(
+				"SELECT ID FROM {$wpdb->posts} WHERE post_status != 'trash' AND post_content LIKE %s",
+				'%' . $wpdb->esc_like($oldUrl) . '%'
+			)) : [];
+			$thumbRefs = get_posts([
+				'post_type'      => 'any',
+				'post_status'    => 'any',
+				'posts_per_page' => -1,
+				'fields'         => 'ids',
+				'meta_key'       => '_thumbnail_id',
+				'meta_value'     => $attId,
+			]);
+			$contentRefs = array_map('intval', $contentRefs);
+			if ($dryRun) {
+				$remaining = array_merge(
+					array_diff($contentRefs, $groupPostIds),
+					array_diff($thumbRefs, $groupPostIds)
+				);
+			} else {
+				// Content already rewritten; anything still pointing here is external.
+				$remaining = array_merge($contentRefs, $thumbRefs);
+			}
+			if (!empty($remaining)) {
+				$stats['skipped']++;
+				$stats['errors'][] = "Flyer attachment {$attId} left in place: still referenced by post(s) " . implode(',', array_unique($remaining));
+				continue;
+			}
+			if (!$dryRun) {
+				if (!wp_delete_attachment($attId, true)) {
+					$stats['errors'][] = "Failed to delete flyer attachment {$attId}";
+					continue;
+				}
+			}
+			$stats['attachments_deleted']++;
+		}
+	}
+
+	return $stats;
+}
+
+/**
+ * AJAX: scan for (dry run) or perform the flyer (event-file) de-duplication.
+ * Pass `confirm=1` to actually apply changes; otherwise it only reports.
+ */
+add_action('wp_ajax_ctwpsync_dedupe_flyers', 'ctwpsync_dedupe_flyers_callback');
+function ctwpsync_dedupe_flyers_callback(): void {
+	if (!wp_verify_nonce($_POST['nonce'] ?? '', 'ctwpsync_validate')) {
+		wp_send_json_error('Security check failed');
+	}
+	if (!current_user_can('manage_options')) {
+		wp_send_json_error('Permission denied');
+	}
+	@set_time_limit(300);
+	$dryRun = (($_POST['confirm'] ?? '') !== '1');
+	$stats  = ctwpsync_dedupe_flyers($dryRun);
+	$stats['dry_run'] = $dryRun;
+	wp_send_json_success($stats);
+}
+
+/**
  * One-time migration: move pre-1.3.4 log files out of the web-accessible
  * plugin/vendor directories into the protected uploads log directory.
  *

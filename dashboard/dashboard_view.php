@@ -141,6 +141,38 @@
 	?>
 
 	<hr>
+	<h3>Image de-duplication</h3>
+	<p class="description">
+		Older versions could import the same ChurchTools image many times, creating duplicate
+		media files (<code>name-1.jpg</code>, <code>name-2.jpg</code>, …) each with a full set of
+		thumbnails. New syncs no longer do this. Use <strong>Scan</strong> to see how many duplicates
+		exist, then <strong>Clean up</strong> to point every event at a single shared image and delete
+		the redundant copies. Only images used as an event's featured image are touched; a copy still
+		used by any other post is left in place.
+	</p>
+	<p>
+		<button type="button" id="ctwpsync_dedupe_scan" class="button">Scan for duplicates</button>
+		<button type="button" id="ctwpsync_dedupe_run" class="button button-primary">Clean up duplicates</button>
+		<span id="ctwpsync_dedupe_message" style="margin-left: 10px;"></span>
+	</p>
+	<pre id="ctwpsync_dedupe_result" style="display:none; max-height: 240px; overflow: auto; background: #f6f7f7; color: #1e1e1e; padding: 10px; border: 1px solid #ccc; font-family: Consolas, Menlo, monospace; font-size: 12px; white-space: pre-wrap; word-break: break-word;"></pre>
+
+	<h4>Flyers (optional)</h4>
+	<p class="description">
+		Flyers (event files with "flyer" in the name) were duplicated the same way, but they are
+		embedded as <strong>links in the event description</strong> rather than as featured images.
+		Cleaning them up rewrites those links in the event content to point at a single shared file
+		before deleting the duplicates — a bit more invasive, so it is a separate step. A duplicate
+		still referenced by any other post is left in place. <strong>Back up before running.</strong>
+	</p>
+	<p>
+		<button type="button" id="ctwpsync_flyer_scan" class="button">Scan flyers</button>
+		<button type="button" id="ctwpsync_flyer_run" class="button">Clean up flyer duplicates</button>
+		<span id="ctwpsync_flyer_message" style="margin-left: 10px;"></span>
+	</p>
+	<pre id="ctwpsync_flyer_result" style="display:none; max-height: 240px; overflow: auto; background: #f6f7f7; color: #1e1e1e; padding: 10px; border: 1px solid #ccc; font-family: Consolas, Menlo, monospace; font-size: 12px; white-space: pre-wrap; word-break: break-word;"></pre>
+
+	<hr>
 	<h3>Sync Log</h3>
 	<?php
 	$ctwpsync_eff_level = ctwpsync_effective_log_level();
@@ -577,6 +609,87 @@ jQuery(document).ready(function($) {
 		}).fail(function() {
 			$msg.text('Failed to clear log.').css('color', 'red');
 		});
+	});
+
+	// --- Image / flyer de-duplication (shared handler) ---
+	function runDedupe(cfg, confirm) {
+		var $msg = $(cfg.msg);
+		var $out = $(cfg.out);
+		$(cfg.buttons).prop('disabled', true);
+		$msg.text(confirm ? 'Cleaning up…' : 'Scanning…').css('color', '');
+		$.post(ajaxurl, { action: cfg.action, nonce: nonce, confirm: confirm ? '1' : '0' }, function(response) {
+			if (response.success) {
+				var d = response.data;
+				var lines = [ d.dry_run ? 'Scan (no changes made):' : 'Cleanup complete:' ];
+				// Render every numeric field the server returned, in a stable order.
+				cfg.fields.forEach(function(f) {
+					if (typeof d[f.key] !== 'undefined') {
+						var label = (f.label + '                              ').substring(0, 28);
+						lines.push('  ' + label + ': ' + d[f.key]);
+					}
+				});
+				if (d.errors && d.errors.length) {
+					lines.push('', 'Notes:');
+					d.errors.forEach(function(e) { lines.push('  - ' + e); });
+				}
+				$out.text(lines.join('\n')).show();
+				if (d.dry_run) {
+					$msg.text(d.dupe_groups > 0 ? 'Found duplicates — click the clean-up button to fix.' : 'No duplicates found.')
+						.css('color', d.dupe_groups > 0 ? '#b26a00' : 'green');
+				} else {
+					$msg.text('Done. Deleted ' + d.attachments_deleted + ' duplicate attachment(s).').css('color', 'green');
+				}
+			} else {
+				$msg.text('Failed: ' + (response.data || 'unknown error')).css('color', 'red');
+			}
+		}).fail(function() {
+			$msg.text('Request failed.').css('color', 'red');
+		}).always(function() {
+			$(cfg.buttons).prop('disabled', false);
+		});
+	}
+
+	var imageDedupeCfg = {
+		action: 'ctwpsync_dedupe_images',
+		msg: '#ctwpsync_dedupe_message',
+		out: '#ctwpsync_dedupe_result',
+		buttons: '#ctwpsync_dedupe_scan, #ctwpsync_dedupe_run',
+		fields: [
+			{ key: 'images', label: 'ChurchTools images checked' },
+			{ key: 'dupe_groups', label: 'Images with duplicates' },
+			{ key: 'events_repointed', label: 'Events re-pointed' },
+			{ key: 'attachments_deleted', label: 'Duplicate attachments' },
+			{ key: 'skipped', label: 'Skipped (used elsewhere)' }
+		]
+	};
+	var flyerDedupeCfg = {
+		action: 'ctwpsync_dedupe_flyers',
+		msg: '#ctwpsync_flyer_message',
+		out: '#ctwpsync_flyer_result',
+		buttons: '#ctwpsync_flyer_scan, #ctwpsync_flyer_run',
+		fields: [
+			{ key: 'flyers', label: 'ChurchTools flyers checked' },
+			{ key: 'dupe_groups', label: 'Flyers with duplicates' },
+			{ key: 'events_rewritten', label: 'Event links rewritten' },
+			{ key: 'attachments_deleted', label: 'Duplicate attachments' },
+			{ key: 'skipped', label: 'Skipped (used elsewhere)' }
+		]
+	};
+
+	$('#ctwpsync_dedupe_scan').click(function() { runDedupe(imageDedupeCfg, false); });
+	$('#ctwpsync_dedupe_run').click(function() {
+		if (!window.confirm('Delete duplicate image attachments and point events at a single shared copy? This permanently deletes the redundant media files and cannot be undone. Back up first if unsure.')) {
+			return;
+		}
+		runDedupe(imageDedupeCfg, true);
+	});
+
+	$('#ctwpsync_flyer_scan').click(function() { runDedupe(flyerDedupeCfg, false); });
+	$('#ctwpsync_flyer_run').click(function() {
+		if (!window.confirm('Clean up duplicate flyer files? This rewrites the flyer links in event descriptions to a single shared file and permanently deletes the redundant PDFs. This edits published event content and cannot be undone. Back up first.')) {
+			return;
+		}
+		runDedupe(flyerDedupeCfg, true);
 	});
 
 	// Scroll the initially-rendered log to the newest entry.
