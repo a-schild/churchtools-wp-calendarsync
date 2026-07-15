@@ -11,3 +11,6 @@ composer.phar
 # Locally-built release artifacts
 /churchtools-wp-sync-*.zip
 /build/
+
+# Diagnostic captures
+*.har
