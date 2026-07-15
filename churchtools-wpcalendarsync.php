@@ -452,6 +452,23 @@ function ctwpsync_effective_log_level(): string {
 }
 
 /**
+ * Build a SyncLogger writing to the plugin log at the effective log level, for logging
+ * from outside the sync flow (e.g. the admin de-duplication tools). Mirrors the logger
+ * construction in churchtools-dosync.php so both write to the same file with the same
+ * verbosity rules.
+ *
+ * @return SyncLogger
+ */
+function ctwpsync_get_logger(): SyncLogger {
+	$level = ctwpsync_effective_log_level();
+	return new SyncLogger(
+		logFile: ctwpsync_log_file(),
+		debugEnabled: $level === 'DEBUG',
+		infoEnabled: in_array($level, ['DEBUG', 'INFO'], true),
+	);
+}
+
+/**
  * Read the tail of the plugin log file for display in the admin.
  *
  * Only the last portion of the file is read (the log rotates at 5 MB), so this
@@ -803,6 +820,19 @@ function ctwpsync_dedupe_images_callback(): void {
 	@set_time_limit(300);
 	$dryRun = (($_POST['confirm'] ?? '') !== '1');
 	$stats  = ctwpsync_dedupe_images($dryRun);
+
+	$logger = ctwpsync_get_logger();
+	$logger->info(sprintf(
+		'Image de-duplication %s: %d image set(s) checked, %d duplicate set(s), %d featured image(s) re-pointed, %d attachment(s) %s, %d skipped',
+		$dryRun ? 'scan (dry run)' : 'cleanup',
+		$stats['images'], $stats['dupe_groups'], $stats['events_repointed'],
+		$stats['attachments_deleted'], $dryRun ? 'to delete' : 'deleted',
+		$stats['skipped']
+	));
+	foreach ($stats['errors'] as $note) {
+		$logger->info('Image de-duplication note: ' . $note);
+	}
+
 	$stats['dry_run'] = $dryRun;
 	wp_send_json_success($stats);
 }
@@ -980,6 +1010,19 @@ function ctwpsync_dedupe_flyers_callback(): void {
 	@set_time_limit(300);
 	$dryRun = (($_POST['confirm'] ?? '') !== '1');
 	$stats  = ctwpsync_dedupe_flyers($dryRun);
+
+	$logger = ctwpsync_get_logger();
+	$logger->info(sprintf(
+		'Flyer de-duplication %s: %d flyer(s) checked, %d duplicate set(s), %d event link(s) rewritten, %d attachment(s) %s, %d skipped',
+		$dryRun ? 'scan (dry run)' : 'cleanup',
+		$stats['flyers'], $stats['dupe_groups'], $stats['events_rewritten'],
+		$stats['attachments_deleted'], $dryRun ? 'to delete' : 'deleted',
+		$stats['skipped']
+	));
+	foreach ($stats['errors'] as $note) {
+		$logger->info('Flyer de-duplication note: ' . $note);
+	}
+
 	$stats['dry_run'] = $dryRun;
 	wp_send_json_success($stats);
 }

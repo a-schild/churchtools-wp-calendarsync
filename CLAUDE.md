@@ -95,6 +95,7 @@ Sync-health options (standalone, not inside `ctwpsync_options`):
 - Plugin log lives in `wp-content/uploads/ctwpsync-logs/wpcalsync-<hash>.log` (hardened dir with `index.php`/`.htaccess`/`web.config`; `<hash>` from `wp_hash()` makes the URL unguessable). Path via `ctwpsync_log_file()`. Rotates at 5 MB keeping one `.1` generation.
 - Verbosity is controlled by the `log_level` setting (ERROR/INFO/DEBUG) on the settings page; read at sync start. `CTWPSYNC_DEBUG` (`true`) in `wp-config.php` forces DEBUG **and** additionally enables the `churchtools-api` library's own file log (fixed, non-relocatable `*.log` files in `vendor/`). Off by default.
 - Admin log viewer on the settings page (dashboard/dashboard_view.php "Sync Log" section) with Refresh/Download/Clear, backed by AJAX actions `ctwpsync_get_log`, `ctwpsync_clear_log`, `ctwpsync_download_log` (all nonce + `manage_options`). Tail read via `ctwpsync_read_log_tail()`.
+- Code outside the sync flow (e.g. the de-duplication AJAX callbacks) logs via `ctwpsync_get_logger()` in the main plugin file, which builds a `SyncLogger` at the effective log level (same file/verbosity rules as the sync). The image/flyer dedupe callbacks log an INFO result summary + any notes.
 - `ctwpsync_migrate_logs()` (priority 4 on `plugins_loaded`) moves pre-1.3.4 logs from the plugin/vendor dirs into the new location once, guarded by the `ctwpsync_logs_migrated` option.
 
 ### ChurchTools API Library
