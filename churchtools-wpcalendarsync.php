@@ -612,12 +612,19 @@ function ctwpsync_download_log_callback(): void {
  *
  * EM must be active (hard dependency).
  *
- * @param bool $dryRun When true, report what would change but make no changes.
- * @return array{images:int,dupe_groups:int,events_repointed:int,attachments_deleted:int,skipped:int,errors:array<int,string>}
+ * Cleanup work is time-boxed: after `$budgetSeconds` of deleting it stops and returns
+ * `more => true`, so a front-end proxy timeout can't kill a large clean-up mid-way. The
+ * caller re-invokes until `more` is false. The dry-run scan is not time-boxed (it makes
+ * no changes and must report the full total).
+ *
+ * @param bool  $dryRun        When true, report what would change but make no changes.
+ * @param float $budgetSeconds Cleanup time budget per call (0 = unlimited).
+ * @return array{images:int,dupe_groups:int,events_repointed:int,attachments_deleted:int,skipped:int,more:bool,errors:array<int,string>}
  */
-function ctwpsync_dedupe_images(bool $dryRun = true): array {
+function ctwpsync_dedupe_images(bool $dryRun = true, float $budgetSeconds = 45.0): array {
 	global $wpdb;
 	$tablename = $wpdb->prefix . 'ctwpsync_mapping';
+	$startTime = microtime(true);
 
 	$stats = [
 		'images'              => 0,
@@ -625,6 +632,7 @@ function ctwpsync_dedupe_images(bool $dryRun = true): array {
 		'events_repointed'    => 0,
 		'attachments_deleted' => 0,
 		'skipped'             => 0,
+		'more'                => false,
 		'errors'              => [],
 	];
 
@@ -654,18 +662,43 @@ function ctwpsync_dedupe_images(bool $dryRun = true): array {
 		$pluginAtts[(int) $id] = true;
 	}
 
-	// c) current featured image of every synced event (also remember which CT image id
-	//    that attachment belongs to, so the surviving copy can be stamped for reuse).
+	// c) current featured image of every synced event, plus the CT image id it belongs to
+	//    (so the surviving copy can be stamped for reuse). Resolved in a single SQL join
+	//    — mapping → Events Manager events table (post_id) → postmeta(_thumbnail_id) —
+	//    rather than instantiating an EM_Event object per event, which is far too slow on
+	//    calendars with many repeating occurrences (it made the scan time out on the proxy).
 	$attToCtImage = [];
-	$eventRows = $wpdb->get_results("SELECT wp_id, ct_image_id FROM `{$tablename}` WHERE wp_id IS NOT NULL AND wp_id > 0");
-	foreach ($eventRows as $er) {
-		$ev = em_get_event((int) $er->wp_id);
-		if ($ev && !empty($ev->ID)) {
-			$thumb = (int) get_post_thumbnail_id((int) $ev->ID);
+	$emTable = $wpdb->prefix . 'em_events';
+	$hasEmTable = ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $emTable)) === $emTable);
+	if ($hasEmTable) {
+		$frows = $wpdb->get_results(
+			"SELECT pm.meta_value AS thumb_id, m.ct_image_id
+			 FROM `{$tablename}` m
+			 INNER JOIN `{$emTable}` e ON e.event_id = m.wp_id
+			 INNER JOIN {$wpdb->postmeta} pm ON pm.post_id = e.post_id AND pm.meta_key = '_thumbnail_id'
+			 WHERE m.wp_id > 0"
+		);
+		foreach ($frows as $fr) {
+			$thumb = (int) $fr->thumb_id;
 			if ($thumb > 0) {
 				$pluginAtts[$thumb] = true;
-				if (!empty($er->ct_image_id) && $er->ct_image_id > 0 && !isset($attToCtImage[$thumb])) {
-					$attToCtImage[$thumb] = (int) $er->ct_image_id;
+				if (!empty($fr->ct_image_id) && (int) $fr->ct_image_id > 0 && !isset($attToCtImage[$thumb])) {
+					$attToCtImage[$thumb] = (int) $fr->ct_image_id;
+				}
+			}
+		}
+	} else {
+		// Fallback via the EM API if the events table name differs (slower).
+		$eventRows = $wpdb->get_results("SELECT wp_id, ct_image_id FROM `{$tablename}` WHERE wp_id IS NOT NULL AND wp_id > 0");
+		foreach ($eventRows as $er) {
+			$ev = function_exists('em_get_event') ? em_get_event((int) $er->wp_id) : null;
+			if ($ev && !empty($ev->ID)) {
+				$thumb = (int) get_post_thumbnail_id((int) $ev->ID);
+				if ($thumb > 0) {
+					$pluginAtts[$thumb] = true;
+					if (!empty($er->ct_image_id) && $er->ct_image_id > 0 && !isset($attToCtImage[$thumb])) {
+						$attToCtImage[$thumb] = (int) $er->ct_image_id;
+					}
 				}
 			}
 		}
@@ -796,6 +829,13 @@ function ctwpsync_dedupe_images(bool $dryRun = true): array {
 			}
 
 			foreach ($dupes as $dupeId) {
+				// Time-box the cleanup: stop before a front-end proxy timeout can kill the
+				// request, and let the caller re-invoke to continue with the rest.
+				if (!$dryRun && $budgetSeconds > 0 && (microtime(true) - $startTime) > $budgetSeconds) {
+					$stats['more'] = true;
+					break 3; // exit dupes, identicalGroups and baseKeys loops
+				}
+
 				// Re-point featured images that point at this duplicate.
 				$featuredPosts = get_posts([
 					'post_type'      => 'any',
@@ -848,6 +888,12 @@ function ctwpsync_dedupe_images(bool $dryRun = true): array {
 		}
 	}
 
+	// Safety: if a time-boxed cleanup batch deleted nothing (e.g. everything remaining is
+	// skipped because it is referenced in post content), don't ask the caller to loop.
+	if (!$dryRun && $stats['more'] && $stats['attachments_deleted'] === 0) {
+		$stats['more'] = false;
+	}
+
 	return $stats;
 }
 
@@ -892,11 +938,12 @@ function ctwpsync_dedupe_images_callback(): void {
 	}
 
 	$logger->info(sprintf(
-		'Image de-duplication %s: %d image set(s) checked, %d duplicate set(s), %d featured image(s) re-pointed, %d attachment(s) %s, %d skipped',
-		$dryRun ? 'scan (dry run)' : 'cleanup',
+		'Image de-duplication %s: %d image set(s) checked, %d duplicate set(s), %d featured image(s) re-pointed, %d attachment(s) %s, %d skipped%s',
+		$dryRun ? 'scan (dry run)' : 'cleanup batch',
 		$stats['images'], $stats['dupe_groups'], $stats['events_repointed'],
 		$stats['attachments_deleted'], $dryRun ? 'to delete' : 'deleted',
-		$stats['skipped']
+		$stats['skipped'],
+		(!$dryRun && !empty($stats['more'])) ? ' (more remaining — continuing)' : ''
 	));
 	foreach ($stats['errors'] as $note) {
 		$logger->info('Image de-duplication note: ' . $note);
@@ -952,14 +999,38 @@ function ctwpsync_dedupe_flyers(bool $dryRun = true): array {
 		return $stats;
 	}
 
+	// Resolve event_id -> post_id in bulk via the Events Manager events table, rather
+	// than loading an EM_Event object per row.
+	$eventIds = [];
+	foreach ($rows as $r) {
+		$eventIds[(int) $r->wp_id] = true;
+	}
+	$eventIds  = array_keys($eventIds);
+	$postByEvent = [];
+	$emTable = $wpdb->prefix . 'em_events';
+	if ($eventIds && $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $emTable)) === $emTable) {
+		$ph  = implode(',', array_fill(0, count($eventIds), '%d'));
+		$ers = $wpdb->get_results($wpdb->prepare("SELECT event_id, post_id FROM `{$emTable}` WHERE event_id IN ($ph)", ...$eventIds));
+		foreach ($ers as $er) {
+			$postByEvent[(int) $er->event_id] = (int) $er->post_id;
+		}
+	} else {
+		foreach ($eventIds as $eid) {
+			$ev = function_exists('em_get_event') ? em_get_event($eid) : null;
+			if ($ev && !empty($ev->ID)) {
+				$postByEvent[$eid] = (int) $ev->ID;
+			}
+		}
+	}
+
 	// Group by CT flyer id: flyer attachment id => list of post ids that link it.
 	$byFlyer = []; // ctFlyerId => [ wpFlyerAttId => [postId, ...] ]
 	foreach ($rows as $r) {
-		$ev = em_get_event((int) $r->wp_id);
-		if (!$ev || empty($ev->ID)) {
+		$postId = $postByEvent[(int) $r->wp_id] ?? 0;
+		if ($postId <= 0) {
 			continue;
 		}
-		$byFlyer[(int) $r->ct_flyer_id][(int) $r->wp_flyer_id][] = (int) $ev->ID;
+		$byFlyer[(int) $r->ct_flyer_id][(int) $r->wp_flyer_id][] = $postId;
 	}
 
 	foreach ($byFlyer as $ctFlyerId => $attMap) {

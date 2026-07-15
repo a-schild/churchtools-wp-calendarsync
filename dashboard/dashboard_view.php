@@ -666,41 +666,76 @@ jQuery(document).ready(function($) {
 	});
 
 	// --- Image / flyer de-duplication (shared handler) ---
+	// Clean-up runs in server-side time-boxed batches: when the response says `more`,
+	// we automatically fire the next batch until it's done, accumulating totals. This
+	// keeps every single request short enough to beat the front-end proxy timeout.
 	function runDedupe(cfg, confirm) {
 		var $msg = $(cfg.msg);
 		var $out = $(cfg.out);
+		var MAX_BATCHES = 500; // hard stop so a runaway can't loop forever
+		var totals = { deleted: 0, repointed: 0, rewritten: 0, skipped: 0, batches: 0 };
+
 		$(cfg.buttons).prop('disabled', true);
-		$msg.text(confirm ? 'Cleaning up…' : 'Scanning…').css('color', '');
-		$.post(ajaxurl, { action: cfg.action, nonce: nonce, confirm: confirm ? '1' : '0' }, function(response) {
-			if (response.success) {
-				var d = response.data;
-				var lines = [ d.dry_run ? 'Scan (no changes made):' : 'Cleanup complete:' ];
-				// Render every numeric field the server returned, in a stable order.
-				cfg.fields.forEach(function(f) {
-					if (typeof d[f.key] !== 'undefined') {
-						var label = (f.label + '                              ').substring(0, 28);
-						lines.push('  ' + label + ': ' + d[f.key]);
-					}
-				});
-				if (d.errors && d.errors.length) {
-					lines.push('', 'Notes:');
-					d.errors.forEach(function(e) { lines.push('  - ' + e); });
+
+		function render(d, done) {
+			var lines = [ d.dry_run ? 'Scan (no changes made):' : (done ? 'Cleanup complete:' : 'Cleanup in progress…') ];
+			cfg.fields.forEach(function(f) {
+				var val = d[f.key];
+				if (!d.dry_run && f.key === 'attachments_deleted') { val = totals.deleted; }
+				if (!d.dry_run && f.key === 'events_repointed')    { val = totals.repointed; }
+				if (!d.dry_run && f.key === 'events_rewritten')    { val = totals.rewritten; }
+				if (typeof val !== 'undefined') {
+					var label = (f.label + '                              ').substring(0, 28);
+					lines.push('  ' + label + ': ' + val);
 				}
-				$out.text(lines.join('\n')).show();
+			});
+			if (!d.dry_run) { lines.push('  ' + ('Batches                       ').substring(0, 28) + ': ' + totals.batches); }
+			if (d.errors && d.errors.length) {
+				lines.push('', 'Notes (this batch):');
+				d.errors.forEach(function(e) { lines.push('  - ' + e); });
+			}
+			$out.text(lines.join('\n')).show();
+		}
+
+		function batch() {
+			$msg.text(confirm ? ('Cleaning up… ' + totals.deleted + ' deleted so far') : 'Scanning…').css('color', '');
+			$.post(ajaxurl, { action: cfg.action, nonce: nonce, confirm: confirm ? '1' : '0' }, function(response) {
+				if (!response.success) {
+					$msg.text('Failed: ' + (response.data || 'unknown error')).css('color', 'red');
+					$(cfg.buttons).prop('disabled', false);
+					return;
+				}
+				var d = response.data;
+				totals.batches++;
+				if (!d.dry_run) {
+					totals.deleted   += (d.attachments_deleted || 0);
+					totals.repointed += (d.events_repointed || 0);
+					totals.rewritten += (d.events_rewritten || 0);
+					totals.skipped    = (d.skipped || 0);
+				}
+
+				var more = !d.dry_run && d.more && totals.batches < MAX_BATCHES;
+				render(d, !more);
+
+				if (more) {
+					batch(); // continue with the next batch
+					return;
+				}
+
 				if (d.dry_run) {
 					$msg.text(d.dupe_groups > 0 ? 'Found duplicates — click the clean-up button to fix.' : 'No duplicates found.')
 						.css('color', d.dupe_groups > 0 ? '#b26a00' : 'green');
 				} else {
-					$msg.text('Done. Deleted ' + d.attachments_deleted + ' duplicate attachment(s).').css('color', 'green');
+					$msg.text('Done. Deleted ' + totals.deleted + ' duplicate attachment(s) in ' + totals.batches + ' batch(es).').css('color', 'green');
 				}
-			} else {
-				$msg.text('Failed: ' + (response.data || 'unknown error')).css('color', 'red');
-			}
-		}).fail(function() {
-			$msg.text('Request failed.').css('color', 'red');
-		}).always(function() {
-			$(cfg.buttons).prop('disabled', false);
-		});
+				$(cfg.buttons).prop('disabled', false);
+			}).fail(function() {
+				$msg.text('Request failed' + (totals.batches > 0 ? ' after ' + totals.batches + ' batch(es) (' + totals.deleted + ' deleted). Click Clean up again to resume.' : '.')).css('color', 'red');
+				$(cfg.buttons).prop('disabled', false);
+			});
+		}
+
+		batch();
 	}
 
 	var imageDedupeCfg = {
