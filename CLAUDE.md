@@ -27,6 +27,7 @@ composer update
 2. Bump the version in `churchtools-wpcalendarsync.php` — update **both** the plugin header (`Version:` line) and the `CTWPSYNC_VERSION` constant (search with grep, line numbers shift over time)
 3. Commit and push, then create a git tag in the form `v1.x.y`
 4. GitHub Actions will build and publish the release ZIP automatically
+5. On the GitHub releases page, add a meaningful changelog/release notes for the new version (summarize the user-facing changes — don't leave the release description empty or auto-generated only)
 
 ### Release History
 
