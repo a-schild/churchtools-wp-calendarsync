@@ -1,5 +1,13 @@
 # churchtools-wp-calendarsync changelog
 
+## 2026-07-30
+- Release v1.5.1
+- **Security: updated vulnerable Guzzle HTTP dependencies** (resolves 4 Dependabot advisories affecting the release ZIP, which installs dependencies from `composer.lock` at build time)
+  - `guzzlehttp/guzzle` `7.14.1` → `7.15.2` — fixes four moderate-severity issues: URI fragments disclosed in redirect `Referer` headers, unbounded response cookies (denial of service), host-only cookie scope not preserved, and `Proxy-Authorization` headers being sent to origin servers
+  - `guzzlehttp/psr7` `2.12.5` → `2.13.0` (pulled in by the guzzle update)
+  - `composer audit` now reports no advisories
+  - Remaining major upgrades (`guzzlehttp/guzzle` 8.x, `guzzlehttp/psr7` 3.x, `guzzlehttp/promises` 3.x, `doctrine/cache` 2.x — the latter abandoned upstream) are pinned by the bundled `5pm-hdh/churchtools-api` fork (`guzzlehttp/guzzle: ^7`, `doctrine/cache: ^1.11`) and cannot be taken without updating that library first. None of them carries a known advisory
+
 ## 2026-07-15
 - Release v1.5.0
 - **Bug fix: de-duplication scan timed out (HTTP 500 from the reverse proxy after ~120 s) on large calendars/media libraries** — two causes, both removed: (1) it resolved each synced event's featured image by loading an `EM_Event` object per event (`em_get_event()`) — now a **single SQL join** (mapping → the Events Manager events table → `postmeta._thumbnail_id`), with an EM-API fallback (the flyer cleanup got the same bulk `event_id → post_id` lookup); (2) it ran **one `LIKE` scan of `postmeta` per image** to find each image's `-N`/`-scaled` siblings — now a **single bulk query** of all attachment files, grouped in memory by a normalised base key (`ctwpsync_image_base_key()`). The scan also no longer reads file contents (`md5_file`) — it estimates duplicate counts from base name + file size (a cheap stat); byte-verification happens only during the (batched) cleanup. The scan now returns in seconds
