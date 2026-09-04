@@ -592,10 +592,10 @@ function processCalendarEntry(
 				// Handle image from ct calendar entry
 				$newCtImageID= $ctCalEntry->getImage()->getId();
 				if ($addMode || $ct_image_id == null || $ct_image_id != $newCtImageID) {
-					$imageURL= $ctCalEntry->getImage()->getFileUrl();
+					$imageURL= $ctCalEntry->getImage()->getImageUrl() . "?crop=original";
 					$imageName= $ctCalEntry->getImage()->getName();
 
-					logDebug("Found image in CT: ". $ctCalEntry->getImage()->getFileUrl()." filename: ".$ctCalEntry->getImage()->getName());
+					logDebug("Found image in CT: ". $ctCalEntry->getImage()->getImageUrl()." filename: ".$ctCalEntry->getImage()->getName());
 	//                if (has_post_thumbnail($event->id)) {
 	//                    logDebug("Has thumbnail");
 	//                    $image= get_post_thumbnail_id( $event->id, 'full' );
