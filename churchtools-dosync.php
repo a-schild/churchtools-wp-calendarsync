@@ -595,7 +595,7 @@ function processCalendarEntry(
 					$imageURL= $ctCalEntry->getImage()->getImageUrl() . "?crop=original";
 					$imageName= $ctCalEntry->getImage()->getName();
 
-					logDebug("Found image in CT: ". $ctCalEntry->getImage()->getImageUrl()." filename: ".$ctCalEntry->getImage()->getName());
+					logDebug("Found image in CT: ". $imageURL." filename: ".$imageName);
 	//                if (has_post_thumbnail($event->id)) {
 	//                    logDebug("Has thumbnail");
 	//                    $image= get_post_thumbnail_id( $event->id, 'full' );
