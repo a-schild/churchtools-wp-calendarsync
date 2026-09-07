@@ -16,6 +16,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # Full history and tags, so the previous tag can be resolved for the compare link
+          fetch-depth: 0
 
       - name: Extract version from plugin file
         id: get_version
@@ -23,6 +26,50 @@ jobs:
           VERSION=$(grep -oP "Version:\s+\K[0-9.]+" churchtools-wpcalendarsync.php)
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Extracted version: $VERSION"
+
+      - name: Extract release notes from CHANGELOG.md
+        id: get_notes
+        run: |
+          VERSION="${{ steps.get_version.outputs.version }}"
+
+          # CHANGELOG.md is a list of "## <date>" sections; the one for this release is
+          # the section containing a "- Release v<version>" marker line. That marker is
+          # dropped from the notes (it is redundant on the release page). The file is
+          # stored with CRLF, so strip CR before matching.
+          tr -d '\r' < CHANGELOG.md | awk -v ver="$VERSION" '
+            function flush() {
+              if (hit) { printf "%s", buf; done = 1; exit 0 }
+              buf = ""; hit = 0
+            }
+            /^## / { if (started) flush(); started = 1; buf = ""; hit = 0; next }
+            started {
+              if ($0 == ("- Release v" ver)) { hit = 1; next }
+              buf = buf $0 "\n"
+            }
+            END { if (started && !done) flush() }
+          ' > release-notes.md
+
+          if [ ! -s release-notes.md ]; then
+            echo "::warning::No '- Release v$VERSION' section found in CHANGELOG.md; publishing minimal notes."
+            printf 'Release %s\n' "$VERSION" > release-notes.md
+          fi
+
+          # Append a compare link against the previous tag, when there is one
+          PREV_TAG=$(git tag -l 'v*' --sort=-v:refname | grep -vx "v$VERSION" | head -1)
+          if [ -n "$PREV_TAG" ]; then
+            printf '\n**Full changelog:** %s/%s/compare/%s...v%s\n' \
+              "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$PREV_TAG" "$VERSION" >> release-notes.md
+          fi
+
+          echo "----- release notes -----"
+          cat release-notes.md
+          echo "-------------------------"
+
+          {
+            echo "notes<<RELEASE_NOTES_EOF"
+            cat release-notes.md
+            echo "RELEASE_NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Build project
         run: |
@@ -37,6 +84,7 @@ jobs:
           # Development-only files (tests, IDE config, logs) are excluded from the release
           rsync -av --exclude='.git' --exclude='build' --exclude='.github' \
                 --exclude='tests' --exclude='.idea' --exclude='.gitignore' \
+                --exclude='release-notes.md' \
                 --exclude='*.log' . build/$PLUGIN_FOLDER/
 
           # Create zip from the build directory (so the plugin folder is at the root of the zip)
@@ -53,3 +101,5 @@ jobs:
           asset_name: churchtools-wp-sync-${{ steps.get_version.outputs.version }}.zip
           tag: ${{ github.ref }}
           overwrite: true
+          release_name: ${{ steps.get_version.outputs.version }}
+          body: ${{ steps.get_notes.outputs.notes }}

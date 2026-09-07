@@ -25,11 +25,11 @@ composer update
 
 ## Releasing a New Version
 
-1. Update `CHANGELOG.md`
+1. Update `CHANGELOG.md`. Add a `## <YYYY-MM-DD>` section whose **first line is `- Release v1.x.y`** — the release workflow keys off that exact marker to build the GitHub release description, so the version must match the tag. Write the entries for a user reading the releases page, not just for the repo
 2. Bump the version in `churchtools-wpcalendarsync.php` — update **both** the plugin header (`Version:` line) and the `CTWPSYNC_VERSION` constant (search with grep, line numbers shift over time)
 3. Commit and push, then create a git tag in the form `v1.x.y`
-4. GitHub Actions will build and publish the release ZIP automatically
-5. On the GitHub releases page, add a meaningful changelog/release notes for the new version (summarize the user-facing changes — don't leave the release description empty or auto-generated only)
+4. GitHub Actions builds and publishes the release ZIP, and **fills the release description from that `CHANGELOG.md` section automatically** (the `- Release v1.x.y` marker line itself is stripped, and a `**Full changelog:** …/compare/<prev tag>...<tag>` link is appended). See the `Extract release notes from CHANGELOG.md` step in `.github/workflows/build-plugin.yml`
+5. Check the published release. If the changelog section is missing or misnamed, the job logs a `::warning::` and publishes a bare `Release 1.x.y` — fix `CHANGELOG.md` and edit the release body (`gh release edit v1.x.y --notes-file <file>`). The release title defaults to the bare version number, so edit it (`--title`) when a headline would help
 
 ### Release History
 
