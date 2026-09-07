@@ -19,7 +19,7 @@ composer install
 composer update
 ```
 
-**PHP executable:** `c:\laragon\bin\php\php-8.3.30-Win32-vs16-x64\php.exe` (Laragon updates the patch version in place — check `c:\laragon\bin\php\` if the path is gone)
+**PHP executable:** `c:\laragon\bin\php\php-8.3.33-Win32-vs16-x64\php.exe` (Laragon updates the patch version in place — check `c:\laragon\bin\php\` if the path is gone)
 
 **Composer:** not on `PATH`; run it as `& "<php.exe>" "c:\laragon\bin\composer\composer.phar" <cmd>`
 

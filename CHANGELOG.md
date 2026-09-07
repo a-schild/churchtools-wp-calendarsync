@@ -1,5 +1,10 @@
 # churchtools-wp-calendarsync changelog
 
+## Unreleased
+- **Bug fix: event images stopped syncing after a ChurchTools API change** (contributed by [@JonFStr](https://github.com/JonFStr), [#25](https://github.com/a-schild/churchtools-wp-calendarsync/pull/25)) — ChurchTools now requires authentication on the old `fileUrl` download link, so the plugin could no longer fetch appointment images, and sites using the "serve images directly from ChurchTools" option (`em_image_attr`) served an `<img src>` that visitors' browsers could not load. The sync now uses the image model's `getImageUrl()`, the new REST download URL that is reachable without authentication, with `?crop=original` appended so the uncropped original is imported instead of a cropped rendition. Filename/extension validation, the base-URL (SSRF) check and the image de-duplication are unaffected — they key on the CT file name and id, not the URL. Flyers keep using the authenticated download path and are unchanged
+- **Improvement: the image debug log line now shows the URL that is actually fetched** — it logged `getImageUrl()` without the `?crop=original` suffix, so the logged URL differed from the request
+- **Dependencies: routine in-constraint updates** — `guzzlehttp/guzzle` `7.15.2` → `7.15.5`, `guzzlehttp/psr7` `2.13.0` → `2.13.1`, `guzzlehttp/promises` `2.5.1` → `2.5.3`, `monolog/monolog` `3.10.0` → `3.11.0`. `composer audit` reports no advisories. The major upgrades (`guzzlehttp/guzzle` 8.x, `guzzlehttp/psr7` 3.x, `guzzlehttp/promises` 3.x, `doctrine/cache` 2.x — abandoned upstream) remain blocked by the bundled `5pm-hdh/churchtools-api` fork's `guzzlehttp/guzzle: ^7` and `doctrine/cache: ^1.11` constraints; none carries a known advisory
+
 ## 2026-07-30
 - Release v1.5.1
 - **Security: updated vulnerable Guzzle HTTP dependencies** (resolves 4 Dependabot advisories affecting the release ZIP, which installs dependencies from `composer.lock` at build time)
