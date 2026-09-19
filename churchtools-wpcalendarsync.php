@@ -591,6 +591,33 @@ function ctwpsync_download_log_callback(): void {
 }
 
 /**
+ * All ChurchTools image ids an image attachment is stamped with.
+ *
+ * `_ctwpsync_ct_image_id` is multi-valued: the same picture uploaded to several
+ * ChurchTools appointments gets a different CT file id each time, and all of them
+ * resolve to the one shared (byte-identical) attachment.
+ *
+ * @param int $attachmentId WordPress attachment id.
+ * @return string[] CT image ids.
+ */
+function ctwpsync_get_ct_image_ids(int $attachmentId): array {
+	return array_map('strval', get_post_meta($attachmentId, '_ctwpsync_ct_image_id', false) ?: []);
+}
+
+/**
+ * Stamp an image attachment with a ChurchTools image id (in addition to any ids it
+ * already carries), so future syncs find and reuse it for that CT image.
+ *
+ * @param int $attachmentId WordPress attachment id.
+ * @param int $ctImageId ChurchTools file id of the image.
+ */
+function ctwpsync_add_ct_image_id(int $attachmentId, int $ctImageId): void {
+	if (!in_array((string) $ctImageId, ctwpsync_get_ct_image_ids($attachmentId), true)) {
+		add_post_meta($attachmentId, '_ctwpsync_ct_image_id', $ctImageId);
+	}
+}
+
+/**
  * Normalise a WordPress attachment file path (`_wp_attached_file`, e.g.
  * `2026/11/pic-1-scaled.jpg`) to a "base key" that groups the WordPress `-N` collision
  * variants and `-scaled` working copies of the same upload together
@@ -815,12 +842,14 @@ function ctwpsync_dedupe_images(bool $dryRun = true, float $budgetSeconds = 45.0
 		}
 
 		$identicalGroups = [];
+		$absById = [];
 		foreach ($bySize as $sizeSet) {
 			if (count($sizeSet) <= 1) {
 				continue; // unique file size cannot be a byte-identical duplicate
 			}
 			$byHash = [];
 			foreach ($sizeSet as $c) {
+				$absById[$c['id']] = realpath($c['abs']) ?: $c['abs'];
 				$hash = @md5_file($c['abs']);
 				if ($hash === false) {
 					continue;
@@ -840,31 +869,35 @@ function ctwpsync_dedupe_images(bool $dryRun = true, float $budgetSeconds = 45.0
 			$dupes     = array_slice($attIds, 1);
 			$stats['dupe_groups']++;
 
-			// Determine the CT image id for this group: an existing stamp on any member,
-			// else the mapping's ct_image_id for whichever member is a synced event's
-			// featured image. Stamp the canonical so future re-adds reuse it.
-			$ctImageId = null;
+			// Determine the CT image ids for this group: the stamps of all members (the
+			// same picture uploaded to several CT appointments has several CT ids, and
+			// each must keep resolving to the surviving copy, or the sync would re-import
+			// it), else the mapping's ct_image_id for whichever member is a synced event's
+			// featured image. Stamp the canonical with all of them.
+			$ctImageIds = [];
 			foreach ($attIds as $a) {
-				$v = get_post_meta($a, '_ctwpsync_ct_image_id', true);
-				if ($v !== '' && $v !== false && $v !== null) {
-					$ctImageId = (int) $v;
-					break;
+				foreach (ctwpsync_get_ct_image_ids((int) $a) as $v) {
+					if ((int) $v > 0) {
+						$ctImageIds[(int) $v] = true;
+					}
 				}
 			}
-			if ($ctImageId === null) {
+			if (!$ctImageIds) {
 				foreach ($attIds as $a) {
 					if (isset($attToCtImage[$a])) {
-						$ctImageId = $attToCtImage[$a];
+						$ctImageIds[$attToCtImage[$a]] = true;
 						break;
 					}
 				}
 			}
-			if (!$dryRun && $ctImageId !== null) {
-				update_post_meta($canonical, '_ctwpsync_ct_image_id', $ctImageId);
-				$wpdb->query($wpdb->prepare(
-					"UPDATE `{$tablename}` SET wp_image_id = %d WHERE ct_image_id = %d",
-					$canonical, $ctImageId
-				));
+			if (!$dryRun) {
+				foreach (array_keys($ctImageIds) as $ctImageId) {
+					ctwpsync_add_ct_image_id($canonical, $ctImageId);
+					$wpdb->query($wpdb->prepare(
+						"UPDATE `{$tablename}` SET wp_image_id = %d WHERE ct_image_id = %d",
+						$canonical, $ctImageId
+					));
+				}
 			}
 
 			foreach ($dupes as $dupeId) {
@@ -873,6 +906,11 @@ function ctwpsync_dedupe_images(bool $dryRun = true, float $budgetSeconds = 45.0
 				if (!$dryRun && $budgetSeconds > 0 && (microtime(true) - $startTime) > $budgetSeconds) {
 					$stats['more'] = true;
 					break 3; // exit dupes, identicalGroups and baseKeys loops
+				}
+				// Two attachment posts sharing one physical file are not copies: deleting
+				// one would delete the file the kept attachment still uses.
+				if (isset($absById[$dupeId], $absById[$canonical]) && $absById[$dupeId] === $absById[$canonical]) {
+					continue;
 				}
 
 				// Re-point featured images that point at this duplicate.
@@ -927,6 +965,12 @@ function ctwpsync_dedupe_images(bool $dryRun = true, float $budgetSeconds = 45.0
 		}
 	}
 
+	// Second pass: identical copies under a different name or in another month folder.
+	// Runs once the same-name pass above is complete (it must not see half-merged sets).
+	if (!$stats['more']) {
+		ctwpsync_dedupe_identical_images($stats, $dryRun, $budgetSeconds, $startTime);
+	}
+
 	// Safety: if a time-boxed cleanup batch deleted nothing (e.g. everything remaining is
 	// skipped because it is referenced in post content), don't ask the caller to loop.
 	if (!$dryRun && $stats['more'] && $stats['attachments_deleted'] === 0) {
@@ -934,6 +978,212 @@ function ctwpsync_dedupe_images(bool $dryRun = true, float $budgetSeconds = 45.0
 	}
 
 	return $stats;
+}
+
+/**
+ * Second de-duplication pass: byte-identical plugin images with a different file name
+ * or in a different month folder (e.g. `2026/10/pic-1.jpg` and `2026/11/pic-1.jpg`,
+ * imported for two ChurchTools appointments that use the same picture). The same-name
+ * pass in ctwpsync_dedupe_images() cannot see these.
+ *
+ * Deliberately stricter than the first pass, so it cannot remove anything still in use:
+ *   - only attachments stamped with `_ctwpsync_ct_image_id` are considered (created by
+ *     this plugin — never a user's own uploads),
+ *   - the original files must be byte-identical (SHA-256), and be different physical
+ *     files (two attachments sharing one file are left alone),
+ *   - a copy is deleted only if no post content/excerpt, post meta (other than
+ *     `_thumbnail_id`, which is re-pointed) or option still references it, neither by
+ *     its file path (plain or JSON-escaped, e.g. page builders) nor by attachment id
+ *     (galleries, image fields, widgets). Any hit — even a coincidental one — leaves
+ *     the copy in place and reports it as skipped.
+ * The kept copy (lowest id) gets all CT image ids of the group, and featured images and
+ * the mapping's `wp_image_id` are re-pointed to it before a copy is deleted.
+ *
+ * The dry run only hashes and counts (no per-copy reference queries), like the first pass.
+ *
+ * @param array $stats         Stats of ctwpsync_dedupe_images(), updated in place.
+ * @param bool  $dryRun        When true, report what would change but make no changes.
+ * @param float $budgetSeconds Cleanup time budget per call (0 = unlimited).
+ * @param float $startTime     microtime(true) when the current request's work started.
+ */
+function ctwpsync_dedupe_identical_images(array &$stats, bool $dryRun, float $budgetSeconds, float $startTime): void {
+	global $wpdb;
+	$tablename = $wpdb->prefix . 'ctwpsync_mapping';
+	$stats['identical_groups'] = 0;
+
+	$stamped = $wpdb->get_col(
+		"SELECT DISTINCT pm.post_id FROM {$wpdb->postmeta} pm
+		 INNER JOIN {$wpdb->posts} p ON p.ID = pm.post_id
+		 WHERE pm.meta_key = '_ctwpsync_ct_image_id' AND p.post_type = 'attachment'"
+	);
+	if (count($stamped) < 2) {
+		return;
+	}
+
+	// Group by physical original file first (size pre-filter, then SHA-256).
+	$bySize = [];
+	foreach ($stamped as $id) {
+		$id   = (int) $id;
+		$file = wp_get_original_image_path($id) ?: get_attached_file($id);
+		if (!$file || !is_file($file)) {
+			continue;
+		}
+		$real = realpath($file) ?: $file;
+		$size = @filesize($real);
+		if ($size === false) {
+			continue;
+		}
+		$bySize[$size][$id] = $real;
+	}
+	$groups = [];
+	foreach ($bySize as $set) {
+		if (count(array_unique($set)) < 2) {
+			continue;
+		}
+		$byHash = [];
+		foreach ($set as $id => $real) {
+			$hash = @hash_file('sha256', $real);
+			if ($hash !== false) {
+				$byHash[$hash][$id] = $real;
+			}
+		}
+		foreach ($byHash as $members) {
+			if (count(array_unique($members)) > 1) {
+				ksort($members);
+				$groups[] = $members;
+			}
+		}
+	}
+
+	foreach ($groups as $members) {
+		$stats['identical_groups']++;
+		$ids       = array_keys($members);
+		$canonical = $ids[0];
+		$dupes     = array_slice($ids, 1);
+
+		if ($dryRun) {
+			// Copies sharing a base name + folder are already counted by the first pass;
+			// estimate only the extra ones (one kept per group).
+			$baseKeys = [];
+			foreach ($ids as $a) {
+				$bk = ctwpsync_image_base_key((string) get_post_meta($a, '_wp_attached_file', true));
+				$baseKeys[$bk ?? ('#' . $a)] = true;
+			}
+			$stats['attachments_deleted'] += count($baseKeys) - 1;
+			continue;
+		}
+
+		foreach ($ids as $a) {
+			foreach (ctwpsync_get_ct_image_ids($a) as $ct) {
+				if ((int) $ct > 0) {
+					ctwpsync_add_ct_image_id($canonical, (int) $ct);
+				}
+			}
+		}
+
+		foreach ($dupes as $dupeId) {
+			if ($budgetSeconds > 0 && (microtime(true) - $startTime) > $budgetSeconds) {
+				$stats['more'] = true;
+				return;
+			}
+			if ($members[$dupeId] === $members[$canonical]) {
+				continue; // same physical file, not a copy
+			}
+
+			$refs = ctwpsync_find_attachment_references($dupeId, $ids);
+			if ($refs) {
+				$stats['skipped']++;
+				$stats['errors'][] = "Attachment {$dupeId} (identical to {$canonical}) left in place: still referenced in " . implode(', ', $refs);
+				continue;
+			}
+
+			$featuredPosts = $wpdb->get_col($wpdb->prepare(
+				"SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = '_thumbnail_id' AND meta_value = %s",
+				(string) $dupeId
+			));
+			foreach ($featuredPosts as $p) {
+				set_post_thumbnail((int) $p, $canonical);
+				$stats['events_repointed']++;
+			}
+			$wpdb->query($wpdb->prepare(
+				"UPDATE `{$tablename}` SET wp_image_id = %d WHERE wp_image_id = %d",
+				$canonical, $dupeId
+			));
+
+			if (!wp_delete_attachment($dupeId, true)) {
+				$stats['errors'][] = "Failed to delete attachment {$dupeId}";
+				continue;
+			}
+			$stats['attachments_deleted']++;
+		}
+	}
+}
+
+/**
+ * Find anything outside featured images that still references an attachment, by its
+ * file path (plain or JSON-escaped) or by its attachment id. Deliberately over-inclusive:
+ * a coincidental match only means a duplicate is kept.
+ *
+ * @param int   $attachmentId The attachment to check.
+ * @param int[] $ignoreIds    Attachments whose own meta is ignored (the identical group).
+ * @return string[] Human-readable descriptions of the references found (empty = unused).
+ */
+function ctwpsync_find_attachment_references(int $attachmentId, array $ignoreIds): array {
+	global $wpdb;
+	$refs = [];
+
+	// File path without extension, e.g. "2026/11/pic-1": matches the full-size URL and
+	// every generated sub-size ("pic-1-300x200.jpg") and "-scaled" variant.
+	$rel  = (string) get_post_meta($attachmentId, '_wp_attached_file', true);
+	$rel  = preg_replace('/-scaled(?=\.[^.]+$)/', '', $rel);
+	$stem = preg_replace('/\.[^.\/]+$/', '', $rel);
+	if ($stem === '' || strlen(basename($stem)) < 3 || preg_match('/[^\x20-\x7E]/', $stem)) {
+		// Non-ASCII names can appear escaped/encoded in ways a LIKE cannot match reliably.
+		return ['(file name cannot be checked reliably)'];
+	}
+	$likes = [
+		'%' . $wpdb->esc_like($stem) . '%',
+		'%' . $wpdb->esc_like(str_replace('/', '\\/', $stem)) . '%',
+	];
+	$idStr = (string) $attachmentId;
+	$ph    = implode(',', array_fill(0, count($ignoreIds), '%d'));
+
+	$posts = $wpdb->get_col($wpdb->prepare(
+		"SELECT ID FROM {$wpdb->posts}
+		 WHERE ID NOT IN ($ph)
+		   AND (post_content LIKE %s OR post_content LIKE %s OR post_excerpt LIKE %s
+		        OR post_content REGEXP %s)
+		 LIMIT 5",
+		...array_merge($ignoreIds, [$likes[0], $likes[1], $likes[0], '(^|[^0-9])' . $idStr . '([^0-9]|$)'])
+	));
+	if ($posts) {
+		$refs[] = 'post(s) ' . implode(',', $posts);
+	}
+
+	$meta = $wpdb->get_results($wpdb->prepare(
+		"SELECT post_id, meta_key FROM {$wpdb->postmeta}
+		 WHERE post_id NOT IN ($ph) AND meta_key <> '_thumbnail_id'
+		   AND (meta_value LIKE %s OR meta_value LIKE %s
+		        OR meta_value = %s OR meta_value LIKE %s OR meta_value LIKE %s)
+		 LIMIT 5",
+		...array_merge($ignoreIds, [$likes[0], $likes[1], $idStr, '%"' . $idStr . '"%', '%i:' . $idStr . ';%'])
+	));
+	foreach ($meta as $m) {
+		$refs[] = "post meta {$m->meta_key} of post {$m->post_id}";
+	}
+
+	$options = $wpdb->get_col($wpdb->prepare(
+		"SELECT option_name FROM {$wpdb->options}
+		 WHERE option_value LIKE %s OR option_value LIKE %s
+		    OR option_value = %s OR option_value LIKE %s OR option_value LIKE %s
+		 LIMIT 5",
+		$likes[0], $likes[1], $idStr, '%"' . $idStr . '"%', '%i:' . $idStr . ';%'
+	));
+	foreach ($options as $o) {
+		$refs[] = "option {$o}";
+	}
+
+	return $refs;
 }
 
 /**
@@ -977,9 +1227,9 @@ function ctwpsync_dedupe_images_callback(): void {
 	}
 
 	$logger->info(sprintf(
-		'Image de-duplication %s: %d image set(s) checked, %d duplicate set(s), %d featured image(s) re-pointed, %d attachment(s) %s, %d skipped%s',
+		'Image de-duplication %s: %d image set(s) checked, %d duplicate set(s), %d identical set(s) with another name/folder, %d featured image(s) re-pointed, %d attachment(s) %s, %d skipped%s',
 		$dryRun ? 'scan (dry run)' : 'cleanup batch',
-		$stats['images'], $stats['dupe_groups'], $stats['events_repointed'],
+		$stats['images'], $stats['dupe_groups'], $stats['identical_groups'] ?? 0, $stats['events_repointed'],
 		$stats['attachments_deleted'], $dryRun ? 'to delete' : 'deleted',
 		$stats['skipped'],
 		(!$dryRun && !empty($stats['more'])) ? ' (more remaining — continuing)' : ''
@@ -1783,19 +2033,25 @@ function ctwpsync_trigger_sync_callback(): void {
 	// same way the hourly event does.
 	$user_id = get_current_user_id();
 
-	// Check if a sync is already scheduled within the next minute
+	// A "Sync Now" event may already be queued — including an overdue one that has not
+	// run yet (e.g. clicked while the sync lock was still held, or while wp-cron was
+	// busy). WordPress rejects a second identical single event within 10 minutes of it,
+	// so just (re)spawn cron to run the queued one instead of failing.
 	$next_scheduled = wp_next_scheduled('ctwpsync_single_sync_event', [$user_id]);
-	if ($next_scheduled && $next_scheduled > time() && $next_scheduled < time() + 60) {
-		wp_send_json_success('Sync already scheduled');
+	if ($next_scheduled && $next_scheduled < time() + 10 * MINUTE_IN_SECONDS) {
+		spawn_cron();
+		wp_send_json_success('Sync already queued, starting it');
 		return;
 	}
 
 	// Schedule a one-time sync event to run immediately
-	$scheduled = wp_schedule_single_event(time(), 'ctwpsync_single_sync_event', [$user_id]);
+	$scheduled = wp_schedule_single_event(time(), 'ctwpsync_single_sync_event', [$user_id], true);
 
-	if ($scheduled === false) {
-		error_log('[ChurchTools Sync] Failed to schedule sync event');
-		wp_send_json_error('Failed to schedule sync');
+	if (is_wp_error($scheduled) || $scheduled === false) {
+		$reason = is_wp_error($scheduled) ? $scheduled->get_error_message() : 'unknown reason';
+		error_log('[ChurchTools Sync] Failed to schedule sync event: ' . $reason);
+		ctwpsync_get_logger()->error('Sync Now: failed to schedule the sync event: ' . $reason);
+		wp_send_json_error('Failed to schedule sync: ' . $reason);
 		return;
 	}
 
@@ -1854,6 +2110,29 @@ function ctwpsync_get_sync_status_callback(): void {
 		'next_scheduled' => $next_scheduled ? wp_date('Y-m-d H:i:s', $next_scheduled) : null,
 		'next_scheduled_minutes' => $next_scheduled ? max(0, floor(($next_scheduled - time()) / 60)) : null,
 	]);
+}
+
+/**
+ * AJAX: release the "sync in progress" lock by hand. A sync killed by the host
+ * keeps the lock until its lease expires (10 min after the last heartbeat, see
+ * churchtools-dosync.php); this lets an admin retry immediately. The killed run is
+ * still reported as aborted by the next sync's start/finish timestamp check.
+ */
+add_action('wp_ajax_ctwpsync_reset_sync_lock', 'ctwpsync_reset_sync_lock_callback');
+function ctwpsync_reset_sync_lock_callback(): void {
+	if (!wp_verify_nonce($_POST['nonce'] ?? '', 'ctwpsync_validate')) {
+		wp_send_json_error('Security check failed');
+	}
+	if (!current_user_can('manage_options')) {
+		wp_send_json_error('Permission denied');
+	}
+	$startedAt = get_transient('churchtools_wpcalendarsync_in_progress');
+	if (!$startedAt) {
+		wp_send_json_success('No sync lock was set');
+	}
+	delete_transient('churchtools_wpcalendarsync_in_progress');
+	ctwpsync_get_logger()->info("Sync lock (sync started {$startedAt}) reset manually by user " . get_current_user_id());
+	wp_send_json_success('Sync lock reset');
 }
 
 /**

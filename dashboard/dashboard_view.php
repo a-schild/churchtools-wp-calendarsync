@@ -110,6 +110,11 @@
 			<?php endif; ?>
 			</span>
 		</p>
+		<p id="ctwpsync_reset_lock_row"<?php echo $sync_in_progress ? '' : ' style="display:none;"'; ?>>
+			<button type="button" id="ctwpsync_reset_lock" class="button">Reset sync lock</button>
+			<span id="ctwpsync_reset_lock_result" style="margin-left: 10px;"></span>
+			<br><span class="description">Only needed if a sync was killed (e.g. by a server time limit) and still shows as in progress. The lock otherwise clears itself 10 minutes after the sync stopped making progress.</span>
+		</p>
 		<p><strong>Last sync:</strong> <?php echo esc_html($lastupdated ?: 'Never'); ?></p>
 		<p><strong>Last sync duration:</strong> <?php echo esc_html($lastsyncduration ?: 'N/A'); ?></p>
 		<p><strong>Next scheduled sync:</strong>
@@ -153,7 +158,10 @@
 		thumbnails. New syncs no longer do this. Use <strong>Scan</strong> to see how many duplicates
 		exist, then <strong>Clean up</strong> to point every event at a single shared image and delete
 		the redundant copies. Only images used as an event's featured image are touched; a copy still
-		used by any other post is left in place.
+		used by any other post is left in place. A second pass also merges byte-identical images the
+		plugin imported under another name or into another month folder (e.g. the same picture used
+		by several ChurchTools appointments); a copy is only deleted if nothing but featured images
+		refers to it.
 	</p>
 	<p>
 		<button type="button" id="ctwpsync_dedupe_scan" class="button">Scan for duplicates</button>
@@ -266,6 +274,27 @@ jQuery(document).ready(function($) {
 	// Sync Now button
 	$('#ctwpsync_sync_now').click(function() {
 		triggerSync();
+	});
+
+	// Reset sync lock button (releases the "in progress" marker of a killed sync)
+	$('#ctwpsync_reset_lock').click(function() {
+		if (!window.confirm('Reset the sync lock?\n\nOnly do this if the sync was killed. If it is actually still running, a second sync could start and run at the same time.')) {
+			return;
+		}
+		var $btn = $(this).prop('disabled', true);
+		var $res = $('#ctwpsync_reset_lock_result');
+		$.post(ajaxurl, { action: 'ctwpsync_reset_sync_lock', nonce: nonce }, function(response) {
+			$btn.prop('disabled', false);
+			if (response.success) {
+				$res.html('<span style="color:green;">&#10003; ' + escapeHtml(response.data) + ' — you can use Sync Now again</span>');
+				updateSyncStatus();
+			} else {
+				$res.html('<span style="color:red;">&#10007; ' + escapeHtml(response.data || 'Unknown error') + '</span>');
+			}
+		}).fail(function(jqXHR, textStatus) {
+			$btn.prop('disabled', false);
+			$res.html('<span style="color:red;">&#10007; Request failed: ' + escapeHtml(textStatus) + '</span>');
+		});
 	});
 
 	// Intercept form submission to validate first
@@ -610,6 +639,7 @@ jQuery(document).ready(function($) {
 					statusHtml = '<span style="color: green;">&#10003; Idle</span>';
 				}
 				$('#ctwpsync_status_indicator').html(statusHtml);
+				$('#ctwpsync_reset_lock_row').toggle(!!data.in_progress);
 
 				if (callback) {
 					callback(data.in_progress);
@@ -723,8 +753,9 @@ jQuery(document).ready(function($) {
 				}
 
 				if (d.dry_run) {
-					$msg.text(d.dupe_groups > 0 ? 'Found duplicates — click the clean-up button to fix.' : 'No duplicates found.')
-						.css('color', d.dupe_groups > 0 ? '#b26a00' : 'green');
+					var found = (d.dupe_groups || 0) + (d.identical_groups || 0) > 0;
+					$msg.text(found ? 'Found duplicates — click the clean-up button to fix.' : 'No duplicates found.')
+						.css('color', found ? '#b26a00' : 'green');
 				} else {
 					$msg.text('Done. Deleted ' + totals.deleted + ' duplicate attachment(s) in ' + totals.batches + ' batch(es).').css('color', 'green');
 				}
@@ -746,6 +777,7 @@ jQuery(document).ready(function($) {
 		fields: [
 			{ key: 'images', label: 'Image sets checked' },
 			{ key: 'dupe_groups', label: 'Duplicate sets found' },
+			{ key: 'identical_groups', label: 'Identical, other name/folder' },
 			{ key: 'events_repointed', label: 'Events re-pointed' },
 			{ key: 'attachments_deleted', label: 'Duplicate attachments' },
 			{ key: 'skipped', label: 'Skipped (used elsewhere)' }

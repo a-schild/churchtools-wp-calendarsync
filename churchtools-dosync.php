@@ -327,6 +327,7 @@ function processCalendarEntry(
 			$wp_flyer_id= null; // WP flyer attachment id
 			$newCtImageID= null;
 			$newWPImageID= null;
+			$currentThumbId= null; // current featured image attachment id (only set when re-checking the image)
 			$newCTFlyerId= null;
 			$newWPFlyerId= null;
 			// logDebug(serialize($result));
@@ -475,7 +476,9 @@ function processCalendarEntry(
 							foreach ($eventFiles as $ctFile) {
 								if ($ctFile->getName() != null && str_contains(strtolower($ctFile->getName()), "flyer")) {
 									logDebug("Found flyer to attach ".$ctFile->getId()." with name ". $ctFile->getName(). " fileURL: ".$ctFile->getFileUrl());
-									if ($ctFile->getId() == $ct_flyer_id && $wp_flyer_id != null) {
+									$mappedFlyerStamp= $wp_flyer_id != null ? get_post_meta($wp_flyer_id, '_ctwpsync_ct_flyer_id', true) : '';
+									if ($ctFile->getId() == $ct_flyer_id && $wp_flyer_id != null && get_post($wp_flyer_id)
+										&& ($mappedFlyerStamp === '' || (string) $mappedFlyerStamp === (string) $ctFile->getId())) {
 										// Already found and mapped
 										logDebug("Found flyer already attached ".$ctFile->getId()." ct_flyer_id ". $ct_flyer_id . " and wp_flyer_id ".$wp_flyer_id);
 										// Backfill the CT-file-id stamp so future syncs of other
@@ -512,6 +515,9 @@ function processCalendarEntry(
 												$event->post_content= addFlyerLink($event->post_content, $newWPFlyerId);
 											} else {
 												logError("Error in media wp upload");
+												// Don't record the new CT flyer id as synced, or the next
+												// sync would treat the previous flyer as the current one.
+												$newCTFlyerId= null;
 											}
 										}
 									}
@@ -591,7 +597,28 @@ function processCalendarEntry(
 			if ($ctCalEntry->getImage() != null) {
 				// Handle image from ct calendar entry
 				$newCtImageID= $ctCalEntry->getImage()->getId();
-				if ($addMode || $ct_image_id == null || $ct_image_id != $newCtImageID) {
+				$imageOutOfDate= false;
+				if (!$addMode && $ct_image_id != null && $ct_image_id == $newCtImageID && empty($config->emImageAttr)) {
+					// The mapping says the image is unchanged, but make sure the featured
+					// image really is the attachment imported for this CT image. Before
+					// 1.5.3 a replaced CT image with the same filename was resolved to the
+					// old attachment by filename, leaving the old picture on the event
+					// forever while the mapping already held the new CT image id.
+					$currentThumbId= (int) get_post_thumbnail_id($event->ID) ?: null;
+					$thumbCtImageIds= $currentThumbId ? ctwpsync_get_ct_image_ids($currentThumbId) : [];
+					if (!in_array((string) $newCtImageID, $thumbCtImageIds, true)) {
+						logInfo("Featured image of ct id ".$ctCalEntry->getId()." (attachment ".($currentThumbId ?? 'none').") does not match CT image id ".$newCtImageID.", re-checking image");
+						$imageOutOfDate= true;
+					} else {
+						ctwpsync_image_md5($currentThumbId); // backfill the content fingerprint (once)
+					}
+					if (!$imageOutOfDate && $currentThumbId && get_post_meta($currentThumbId, '_ctwpsync_sizes_pending', true)) {
+						// A previous run was killed while generating this image's sizes
+						logInfo("Finishing interrupted image sizes of attachment ".$currentThumbId." for ct id ".$ctCalEntry->getId());
+						ctwpsync_finish_image_sizes($currentThumbId);
+					}
+				}
+				if ($addMode || $ct_image_id == null || $ct_image_id != $newCtImageID || $imageOutOfDate) {
 					$imageURL= $ctCalEntry->getImage()->getImageUrl() . "?crop=original";
 					$imageName= $ctCalEntry->getImage()->getName();
 
@@ -631,8 +658,13 @@ function processCalendarEntry(
 				if ( $imageURL != null && empty( $img_attr_name ) ) {
 					// image embedding is disabled, download the image (or reuse a
 					// previously-imported attachment for the same CT image id)
-					$newWPImageID = downloadEventImage( $imageURL, $imageName, $event->ID, $sDate, $config->url, $newCtImageID );
+					$newWPImageID = downloadEventImage( $imageURL, $imageName, $event->ID, $sDate, $config->url, $newCtImageID, $currentThumbId );
 					logDebug("Attached image ".$imageName." from ".$imageURL." as attachement ".$newWPImageID);
+					if ($newWPImageID == null) {
+						// Don't record the CT image id as synced when the image could not be
+						// imported, so the next sync tries again instead of skipping it.
+						$newCtImageID= null;
+					}
 				}
 				if ($addMode) {
 					// Keeps track of ct event id and wp event id for subsequent updates+deletions
@@ -934,9 +966,10 @@ function cleanupOldEntries(string $startDate, string $processingStart): void {
  * @param \DateTime $eventDate Event date for organizing uploads
  * @param string $ctBaseUrl Expected ChurchTools base URL for SSRF protection
  * @param int|null $ctImageId ChurchTools file id of the image, used for library-wide de-duplication
+ * @param int|null $currentAttachmentId The event's current featured image, reused (and stamped) if it is byte-identical
  * @return int|null Attachment ID or null on failure
  */
-function downloadEventImage(string $fileURL, string $fileName, int $postID, \DateTime $eventDate, string $ctBaseUrl = '', ?int $ctImageId = null): ?int {
+function downloadEventImage(string $fileURL, string $fileName, int $postID, \DateTime $eventDate, string $ctBaseUrl = '', ?int $ctImageId = null, ?int $currentAttachmentId = null): ?int {
 	if (!empty($ctBaseUrl) && !str_starts_with($fileURL, $ctBaseUrl)) {
 		logError("Refused to download image from untrusted URL: " . $fileURL);
 		return null;
@@ -952,6 +985,8 @@ function downloadEventImage(string $fileURL, string $fileName, int $postID, \Dat
 		if ($existingId) {
 			logDebug("Reusing existing attachment {$existingId} for CT image id {$ctImageId}, skipping download");
 			set_post_thumbnail( $postID, $existingId );
+			ctwpsync_image_md5($existingId); // backfill the content fingerprint
+			ctwpsync_finish_image_sizes($existingId);
 			return $existingId;
 		}
 	}
@@ -966,19 +1001,6 @@ function downloadEventImage(string $fileURL, string $fileName, int $postID, \Dat
 	// Set filename, incl path
 	$sanFileName= sanitize_file_name($fileName);
 	$fullFilename = "{$upload_folder}/{$uploadPart}/{$sanFileName}";
-	if (file_exists($fullFilename)) {
-		logDebug("File exists: ".$fullFilename);
-		$attachment_id = get_attachment_id_by_filename($uploadPart, $fileName);
-		if ($attachment_id) {
-			logDebug("File attachment exists: ".$fullFilename. " post ".$attachment_id." skipping new upload");
-			set_post_thumbnail( $postID, $attachment_id );
-			return $attachment_id;
-		} else {
-			logDebug("File attachment does not exists: ".$fullFilename);
-		}
-	} else {
-		logDebug("File not existing: ".$fullFilename);
-	}
 
 	// Bound the download so a slow/hung image URL can't stall the whole sync
 	// (plain file_get_contents would otherwise wait up to default_socket_timeout,
@@ -1008,6 +1030,57 @@ function downloadEventImage(string $fileURL, string $fileName, int $postID, \Dat
 		return null;
 	}
 
+	// Secondary de-duplication: the event's current featured image, or an attachment
+	// with the same filename in the target month folder. Reuse it only if it is
+	// byte-identical to the download — a filename match alone is not enough, because a
+	// CT image replaced by a new upload with the same name must not resolve to the old
+	// picture. An identical attachment stamped with other CT ids is the same picture
+	// uploaded to another appointment, so it just gets this CT id added.
+	$contentHash = md5($fileContent);
+	$candidates = [];
+	// Any image imported by the sync with the same content (fingerprint recorded on
+	// import): the same picture uploaded to several CT appointments, each with its own
+	// CT image id, is then stored only once.
+	$byContent = get_posts([
+		'post_type'      => 'attachment',
+		'post_status'    => 'inherit',
+		'posts_per_page' => 3,
+		'fields'         => 'ids',
+		'orderby'        => 'ID',
+		'order'          => 'ASC',
+		'meta_key'       => '_ctwpsync_image_md5',
+		'meta_value'     => $contentHash,
+	]);
+	foreach ($byContent as $id) {
+		$candidates[] = (int) $id;
+	}
+	if ($currentAttachmentId) {
+		$candidates[] = $currentAttachmentId;
+	}
+	if (file_exists($fullFilename)) {
+		$byName = get_attachment_id_by_filename($uploadPart, $fileName);
+		if ($byName) {
+			$candidates[] = (int) $byName;
+		}
+	}
+	foreach (array_unique($candidates) as $candidateId) {
+		// Compare against the original upload, not WP's "-scaled" copy of large images.
+		// Always verified against the actual file, never trusted from the stored fingerprint.
+		$candidateFile = wp_get_original_image_path($candidateId) ?: get_attached_file($candidateId);
+		if ($candidateFile && file_exists($candidateFile) && md5_file($candidateFile) === $contentHash) {
+			update_post_meta($candidateId, '_ctwpsync_image_md5', $contentHash);
+			logDebug("Attachment {$candidateId} ({$candidateFile}) is identical to the CT image, skipping new upload");
+			if ($ctImageId !== null) {
+				ctwpsync_add_ct_image_id($candidateId, $ctImageId);
+			}
+			set_post_thumbnail( $postID, $candidateId );
+			ctwpsync_finish_image_sizes($candidateId);
+			return $candidateId;
+		}
+		logDebug("Attachment {$candidateId} differs from the CT image, not reusing it");
+	}
+
+	$attachment_id = null;
     $upload_file = wp_upload_bits( $sanFileName, null, $fileContent, $uploadPart);
     if ( ! $upload_file['error'] ) {
 	  logDebug("Result of fileupload: " . json_encode($upload_file));
@@ -1025,23 +1098,83 @@ function downloadEventImage(string $fileURL, string $fileName, int $postID, \Dat
       $attachment_id = wp_insert_attachment( $attachment, $upload_file['file'], $postID );
 
       if ( ! is_wp_error( $attachment_id ) ) {
-         // if attachment post was successfully created, insert it as a thumbnail to the post $post_id.
-         require_once(ABSPATH . "wp-admin" . '/includes/image.php');
-
-         $attachment_data = wp_generate_attachment_metadata( $attachment_id, $upload_file['file'] );
-
-         wp_update_attachment_metadata( $attachment_id,  $attachment_data );
-         set_post_thumbnail( $postID, $attachment_id );
-         // Stamp the CT image id so future syncs can find and reuse this single
-         // attachment (see get_attachment_id_by_ct_image_id / the dedup guard above).
+         // Stamp the CT image id, set the featured image and flag the sizes as pending
+         // BEFORE generating the image sizes. Generating them can take 30 s for a large
+         // photo, and if the host kills the sync meanwhile, the next run then finds and
+         // finishes this attachment (see ctwpsync_finish_image_sizes) instead of
+         // uploading yet another "name-1.jpg" copy.
          if ( $ctImageId !== null ) {
-            update_post_meta( $attachment_id, '_ctwpsync_ct_image_id', $ctImageId );
+            ctwpsync_add_ct_image_id( $attachment_id, $ctImageId );
          }
+         set_post_thumbnail( $postID, $attachment_id );
+         update_post_meta( $attachment_id, '_ctwpsync_image_md5', $contentHash );
+         update_post_meta( $attachment_id, '_ctwpsync_sizes_pending', 1 );
+         ctwpsync_finish_image_sizes( $attachment_id );
        }
     } else {
 		logError("Error in file upload: " . ($upload_file['error'] ?? json_encode($upload_file)));
 	}
-    return $attachment_id;
+    return is_wp_error($attachment_id) ? null : $attachment_id;
+}
+
+/**
+ * Content fingerprint (md5 of the original file) of an image imported by the sync,
+ * computed and stored in `_ctwpsync_image_md5` if missing. Lets downloadEventImage()
+ * find an identical, already imported image for another CT image id.
+ *
+ * @param int $attachmentId WordPress attachment id.
+ * @return string|null md5, or null if the file is missing.
+ */
+function ctwpsync_image_md5(int $attachmentId): ?string {
+	$md5 = get_post_meta($attachmentId, '_ctwpsync_image_md5', true);
+	if (is_string($md5) && $md5 !== '') {
+		return $md5;
+	}
+	$file = wp_get_original_image_path($attachmentId) ?: get_attached_file($attachmentId);
+	if (!$file || !is_file($file)) {
+		return null;
+	}
+	$md5 = md5_file($file);
+	if ($md5 === false) {
+		return null;
+	}
+	update_post_meta($attachmentId, '_ctwpsync_image_md5', $md5);
+	return $md5;
+}
+
+/**
+ * Generate (or finish generating) the image sizes of an attachment imported by the
+ * sync, if they are still flagged as pending (`_ctwpsync_sizes_pending`).
+ *
+ * WordPress saves the attachment metadata after every generated sub-size, so after a
+ * killed run wp_update_image_subsizes() only creates the sizes still missing — every
+ * attempt makes progress, even on a host that kills long requests.
+ *
+ * @param int $attachmentId WordPress attachment id.
+ */
+function ctwpsync_finish_image_sizes(int $attachmentId): void {
+	if (!get_post_meta($attachmentId, '_ctwpsync_sizes_pending', true)) {
+		return;
+	}
+	require_once(ABSPATH . 'wp-admin/includes/image.php');
+	$file  = get_attached_file($attachmentId);
+	$start = microtime(true);
+	logDebug("Generating image sizes for attachment {$attachmentId} ({$file})");
+	if (function_exists('set_time_limit')) {
+		@set_time_limit(300);
+	}
+	if (!wp_get_attachment_metadata($attachmentId)) {
+		$metadata = wp_generate_attachment_metadata($attachmentId, $file);
+		wp_update_attachment_metadata($attachmentId, $metadata);
+	} else {
+		$result = wp_update_image_subsizes($attachmentId);
+		if (is_wp_error($result)) {
+			logError("Could not finish image sizes for attachment {$attachmentId}: " . $result->get_error_message());
+		}
+	}
+	delete_post_meta($attachmentId, '_ctwpsync_sizes_pending');
+	logDebug(sprintf("Image sizes for attachment %d done in %.1f s (peak memory %.0f MB)",
+		$attachmentId, microtime(true) - $start, memory_get_peak_usage(true) / 1048576));
 }
 
 /**

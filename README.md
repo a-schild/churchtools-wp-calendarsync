@@ -20,7 +20,8 @@ https://de.wordpress.org/plugins/events-manager/
 - Sync window is specified by n days in the past and m days in the future
 - Uses the modern REST api of churchtools
 - Background sync every 57 minutes, plus a "Sync Now" button and a status
-  display showing the last sync time and duration
+  display showing the last sync time and duration; a "Reset sync lock"
+  button releases a sync that was killed by the server (e.g. a time limit)
 - Optionally sync churchtool appointment tags as wordpress categories
 - Writes a log file to a protected folder under wp-content/uploads;
   enable debug logging by defining the CTWPSYNC_DEBUG constant in wp-config.php
