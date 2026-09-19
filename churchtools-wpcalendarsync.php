@@ -20,7 +20,7 @@
  * Tags:              churchtools, events manager, sync, calendar
  * Requires at least: 5.8
  * Requires PHP:      8.2
- * Tested up to:      7.0.1
+ * Tested up to:      7.1.1
  * Stable tag:        main
  *
  */

@@ -10,6 +10,8 @@
 - **Bug fix (flyers): a failed flyer import made the sync keep the old flyer for good** — as with images, the new ChurchTools file id was recorded even when the flyer could not be imported, so later syncs treated the previous flyer as current (and marked it with the new id). The id is now only recorded after a successful import, and a mapped flyer marked with a different ChurchTools id is imported again
 - **Bug fix: "Sync Now" failed with "Failed to schedule sync"** — when an earlier Sync Now request was still queued (for example clicked while a sync was running or locked), WordPress refused to schedule a second identical event within 10 minutes. The button now starts the queued sync instead, and a real scheduling failure shows (and logs) the reason
 - **New: "Reset sync lock" button on the Status tab** — when the server kills a sync (for example on a PHP time limit), the sync stays marked as in progress and every new sync is skipped until the lock expires 10 minutes later. The button (shown only while a sync is marked as in progress) releases the lock at once, so **Sync Now** can be used again right away. The reset is written to the sync log, and the killed run is still reported as aborted by the next sync
+- **Compatibility: tested with WordPress 7.1.1**
+- **Dependencies: `monolog/monolog` `3.11.0` → `3.12.0`** (in-constraint update). `composer audit` reports no advisories. The major upgrades (`guzzlehttp/guzzle` 8.x, `guzzlehttp/psr7` 3.x, `guzzlehttp/promises` 3.x, `doctrine/cache` 2.x — abandoned upstream) remain blocked by the bundled `5pm-hdh/churchtools-api` fork's constraints
 
 ## 2026-09-07
 - Release v1.5.2
