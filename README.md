@@ -115,6 +115,11 @@ event manager, the church tool sync process will not touch these.
     (this also enables the churchtools-api library's own log)
   - Logs live in wp-content/uploads/ctwpsync-logs/ and rotate at 5 MB
   - Turn it back off once you are done
+- Self-hosted ChurchTools in your local network
+  - ChurchTools URLs must resolve to a public address (protection against
+    requests to internal services)
+  - For a ChurchTools server on a private address, add
+    `define('CTWPSYNC_ALLOW_PRIVATE_URLS', true);` to wp-config.php
 - Tune the sync window
   - The "past days" and "future days" settings control how far back and
     forward events are pulled

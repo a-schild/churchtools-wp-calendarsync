@@ -502,17 +502,7 @@ function processCalendarEntry(
 											$event->post_content= addFlyerLink($event->post_content, $newWPFlyerId);
 										} else {
 											// Download from CT and add to media library
-											$tmpFlyer= sys_get_temp_dir().DIRECTORY_SEPARATOR.$ctFile->getId();
-											if (!is_dir($tmpFlyer)) {
-												mkdir($tmpFlyer);
-											}
-											$fileResult= $ctFile->downloadToPath($tmpFlyer);
-											$safeFileName= sanitize_file_name(basename($ctFile->getName()));
-											$tmpFlyerFile= $tmpFlyer. DIRECTORY_SEPARATOR . $safeFileName;
-											logInfo("Downloaded to ".$fileResult." ".$tmpFlyerFile);
-											// Then attach a link to the file to the event content
-											// media_handle_sideload see below
-											$newWPFlyerId= uploadFromLocalFile($tmpFlyerFile, $ctFile->getName(), null, null, $sDate->format('Y/m'));
+											$newWPFlyerId= downloadFlyerToMediaLibrary($ctFile, $sDate->format('Y/m'));
 											if ($newWPFlyerId) {
 												// Stamp the CT file id for future reuse (see above).
 												update_post_meta($newWPFlyerId, '_ctwpsync_ct_flyer_id', $newCTFlyerId);
@@ -1122,6 +1112,55 @@ function downloadEventImage(string $fileURL, string $fileName, int $postID, \Dat
 		logError("Error in file upload: " . ($upload_file['error'] ?? json_encode($upload_file)));
 	}
     return is_wp_error($attachment_id) ? null : $attachment_id;
+}
+
+/**
+ * Download a ChurchTools event file (flyer) and add it to the media library.
+ *
+ * The file content is fetched here and written under a sanitised name into a private,
+ * randomly named temp folder. The library's File::downloadToPath() is deliberately not
+ * used: it writes to "<path>/<name>" with the file name exactly as ChurchTools returns
+ * it, so a name containing "../" would write outside the temp folder (path traversal),
+ * and names with spaces or umlauts never matched the sanitised name read back.
+ *
+ * @param \CTApi\Models\Common\File\File $ctFile ChurchTools file.
+ * @param string $uploadSubPath Upload month folder, e.g. "2026/10".
+ * @return int|false Attachment id, or false on failure.
+ */
+function downloadFlyerToMediaLibrary(\CTApi\Models\Common\File\File $ctFile, string $uploadSubPath): int|false {
+	$safeFileName = sanitize_file_name(basename(str_replace('\\', '/', (string) $ctFile->getName())));
+	if ($safeFileName === '' || pathinfo($safeFileName, PATHINFO_EXTENSION) === '') {
+		logError("Refused flyer with unusable file name: " . $ctFile->getName());
+		return false;
+	}
+
+	$content = $ctFile->requestFileContent();
+	if (!is_string($content) || $content === '') {
+		logError("Failed to download flyer " . $ctFile->getId() . " (" . $safeFileName . ")");
+		return false;
+	}
+
+	$tmpDir = trailingslashit(get_temp_dir()) . 'ctwpsync-' . wp_generate_password(20, false);
+	if (!wp_mkdir_p($tmpDir)) {
+		logError("Could not create temp folder for flyer " . $safeFileName);
+		return false;
+	}
+	@chmod($tmpDir, 0700);
+	$tmpFile = $tmpDir . '/' . $safeFileName;
+	try {
+		if (file_put_contents($tmpFile, $content) === false) {
+			logError("Could not write flyer temp file " . $tmpFile);
+			return false;
+		}
+		logInfo("Downloaded flyer " . $ctFile->getId() . " to " . $tmpFile);
+		// media_handle_sideload (inside) moves the temp file into the uploads folder
+		return uploadFromLocalFile($tmpFile, $ctFile->getName(), null, null, $uploadSubPath);
+	} finally {
+		if (file_exists($tmpFile)) {
+			@unlink($tmpFile);
+		}
+		@rmdir($tmpDir);
+	}
 }
 
 /**

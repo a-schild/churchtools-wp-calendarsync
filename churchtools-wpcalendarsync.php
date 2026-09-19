@@ -10,7 +10,7 @@
  * Plugin Name:       Churchtools WP Calendarsync
  * Plugin URI:        https://github.com/a-schild/churchtools-wp-calendarsync
  * Description:       Churchtools wordpress calendar sync to events manager, requires "Events Manager" plugin. The sync is scheduled every hour to update WP events from churchtool.
- * Version:           1.5.3
+ * Version:           1.5.4
  * Author:            André Schild
  * Author URI:        https://github.com/a-schild/churchtools-wp-calendarsync/
  * License:           GPLv2 or later
@@ -268,7 +268,7 @@ function ctwpsync_add_settings_link(array $links): array {
  * Start at version 1.0.0 and use SemVer - https://semver.org
  * Rename this for your plugin and update it as you release new versions.
  */
-define( 'CTWPSYNC_VERSION', '1.5.3' );
+define( 'CTWPSYNC_VERSION', '1.5.4' );
 
 function ctwpsync_setup_menu(): void {
 	add_options_page('ChurchTools Calendar Importer', 'ChurchTools Calsync', 'manage_options', 'churchtools-wpcalendarsync', 'ctwpsync_dashboard');
@@ -321,14 +321,26 @@ function save_ctwpsync_settings(): void {
 
 	$saved_data = get_option('ctwpsync_options');
 
-	// If API token is empty, keep the existing one
+	// If API token is empty, keep the existing one — but only for the same ChurchTools
+	// URL, so the saved (hidden) token can't be redirected to another host.
 	if (empty($_POST['ctwpsync_apitoken']) && $saved_data && !empty($saved_data['apitoken'])) {
+		if (!ctwpsync_urls_match((string) ($_POST['ctwpsync_url'] ?? ''), (string) ($saved_data['url'] ?? ''))) {
+			add_settings_error('ctwpsync_options', 'token_required', __('The ChurchTools URL was changed: please enter the API token again.', 'ctwpsync'), 'error');
+			return;
+		}
 		$_POST['ctwpsync_apitoken'] = $saved_data['apitoken'];
 	}
 
 	$config = SyncConfig::fromPost();
 	if ($config === null) {
 		add_settings_error('ctwpsync_options', 'invalid_url', __('Invalid URL format. Please enter a valid ChurchTools URL.', 'ctwpsync'), 'error');
+		return;
+	}
+	// Changing the URL must resolve to a public address (unchanged URLs are kept as
+	// they are, so an existing self-hosted setup keeps working).
+	if (!($saved_data && ctwpsync_urls_match($config->url, (string) ($saved_data['url'] ?? '')))
+		&& !ctwpsync_is_valid_remote_url($config->url)) {
+		add_settings_error('ctwpsync_options', 'invalid_url', ctwpsync_invalid_url_message(), 'error');
 		return;
 	}
 	$data = $config->toArray();
@@ -1774,7 +1786,78 @@ function ctwpsync_is_valid_remote_url(string $url): bool {
 		return false;
 	}
 	$scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
-	return in_array($scheme, ['http', 'https'], true);
+	if (!in_array($scheme, ['http', 'https'], true)) {
+		return false;
+	}
+	$host = trim((string) parse_url($url, PHP_URL_HOST), '[]');
+	if ($host === '') {
+		return false;
+	}
+	if (ctwpsync_allow_private_urls()) {
+		return true;
+	}
+	// Block loopback, private, link-local and reserved targets (e.g. localhost,
+	// 192.168.x.x, the 169.254.169.254 cloud metadata service): every address the
+	// host resolves to must be public.
+	$ips = filter_var($host, FILTER_VALIDATE_IP) ? [$host] : ctwpsync_resolve_host($host);
+	if (!$ips) {
+		return false; // unresolvable
+	}
+	foreach ($ips as $ip) {
+		if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+/**
+ * Whether ChurchTools URLs on private/internal addresses are allowed — only for a
+ * self-hosted ChurchTools server in the local network. Enable with
+ * `define('CTWPSYNC_ALLOW_PRIVATE_URLS', true);` in wp-config.php or the
+ * `ctwpsync_allow_private_urls` filter.
+ */
+function ctwpsync_allow_private_urls(): bool {
+	return (bool) apply_filters('ctwpsync_allow_private_urls', defined('CTWPSYNC_ALLOW_PRIVATE_URLS') && CTWPSYNC_ALLOW_PRIVATE_URLS);
+}
+
+/**
+ * All IPv4 and IPv6 addresses a host name resolves to.
+ *
+ * @param string $host Host name.
+ * @return string[] IP addresses (empty if unresolvable).
+ */
+function ctwpsync_resolve_host(string $host): array {
+	$ips = @gethostbynamel($host) ?: [];
+	if (function_exists('dns_get_record')) {
+		$aaaa = @dns_get_record($host, DNS_AAAA);
+		if (is_array($aaaa)) {
+			foreach ($aaaa as $r) {
+				if (!empty($r['ipv6'])) {
+					$ips[] = $r['ipv6'];
+				}
+			}
+		}
+	}
+	return array_values(array_unique($ips));
+}
+
+/**
+ * User-facing message for a ChurchTools URL rejected by ctwpsync_is_valid_remote_url().
+ */
+function ctwpsync_invalid_url_message(): string {
+	return 'Invalid ChurchTools URL: it must be a http(s) URL whose host resolves to a public address. '
+		. "For a self-hosted ChurchTools server in the local network, add define('CTWPSYNC_ALLOW_PRIVATE_URLS', true); to wp-config.php.";
+}
+
+/**
+ * Whether two ChurchTools URLs point to the same installation (ignores case and a
+ * trailing slash).
+ */
+function ctwpsync_urls_match(string $a, string $b): bool {
+	$a = rtrim(trim($a), '/');
+	$b = rtrim(trim($b), '/');
+	return $a !== '' && strcasecmp($a, $b) === 0;
 }
 
 /**
@@ -1806,6 +1889,10 @@ function ctwpsync_validate_connection_callback(): void {
 	if (empty($token) && $useSavedToken) {
 		$saved_data = get_option('ctwpsync_options');
 		if ($saved_data && !empty($saved_data['apitoken'])) {
+			// Never send the saved (hidden) token to another host than the saved one
+			if (!ctwpsync_urls_match($url, (string) ($saved_data['url'] ?? ''))) {
+				wp_send_json_error('The saved API token can only be used with the saved ChurchTools URL. Enter the API token again to use a different URL.');
+			}
 			$token = $saved_data['apitoken'];
 		}
 	}
@@ -1817,7 +1904,7 @@ function ctwpsync_validate_connection_callback(): void {
 
 	if (!ctwpsync_is_valid_remote_url($url)) {
 		error_log('[ChurchTools Sync] Connection test failed: Invalid URL format');
-		wp_send_json_error('Invalid URL format (must be a http(s) URL)');
+		wp_send_json_error(ctwpsync_invalid_url_message());
 	}
 
 	error_log('[ChurchTools Sync] Testing connection to: ' . $url);
@@ -1882,6 +1969,10 @@ function ctwpsync_get_calendars_callback(): void {
 	if (empty($token) && $useSavedToken) {
 		$saved_data = get_option('ctwpsync_options');
 		if ($saved_data && !empty($saved_data['apitoken'])) {
+			// Never send the saved (hidden) token to another host than the saved one
+			if (!ctwpsync_urls_match($url, (string) ($saved_data['url'] ?? ''))) {
+				wp_send_json_error('The saved API token can only be used with the saved ChurchTools URL. Enter the API token again to use a different URL.');
+			}
 			$token = $saved_data['apitoken'];
 		}
 	}
@@ -1893,7 +1984,7 @@ function ctwpsync_get_calendars_callback(): void {
 
 	if (!ctwpsync_is_valid_remote_url($url)) {
 		error_log('[ChurchTools Sync] Calendar fetch failed: Invalid URL format');
-		wp_send_json_error('Invalid URL format (must be a http(s) URL)');
+		wp_send_json_error(ctwpsync_invalid_url_message());
 	}
 
 	error_log('[ChurchTools Sync] Fetching calendars from: ' . $url);
@@ -1958,6 +2049,10 @@ function ctwpsync_get_resource_types_callback(): void {
 	if (empty($token) && $useSavedToken) {
 		$saved_data = get_option('ctwpsync_options');
 		if ($saved_data && !empty($saved_data['apitoken'])) {
+			// Never send the saved (hidden) token to another host than the saved one
+			if (!ctwpsync_urls_match($url, (string) ($saved_data['url'] ?? ''))) {
+				wp_send_json_error('The saved API token can only be used with the saved ChurchTools URL. Enter the API token again to use a different URL.');
+			}
 			$token = $saved_data['apitoken'];
 		}
 	}
@@ -1969,7 +2064,7 @@ function ctwpsync_get_resource_types_callback(): void {
 
 	if (!ctwpsync_is_valid_remote_url($url)) {
 		error_log('[ChurchTools Sync] Resource types fetch failed: Invalid URL format');
-		wp_send_json_error('Invalid URL format (must be a http(s) URL)');
+		wp_send_json_error(ctwpsync_invalid_url_message());
 	}
 
 	error_log('[ChurchTools Sync] Fetching resource types from: ' . $url);
