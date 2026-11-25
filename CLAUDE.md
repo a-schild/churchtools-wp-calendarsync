@@ -30,6 +30,7 @@ composer update
 3. Commit and push, then create a git tag in the form `v1.x.y`
 4. GitHub Actions builds and publishes the release ZIP, and **fills the release description from that `CHANGELOG.md` section automatically** (the `- Release v1.x.y` marker line itself is stripped, and a `**Full changelog:** …/compare/<prev tag>...<tag>` link is appended). See the `Extract release notes from CHANGELOG.md` step in `.github/workflows/build-plugin.yml`
 5. Check the published release. If the changelog section is missing or misnamed, the job logs a `::warning::` and publishes a bare `Release 1.x.y` — fix `CHANGELOG.md` and edit the release body (`gh release edit v1.x.y --notes-file <file>`). The release title defaults to the bare version number, so edit it (`--title`) when a headline would help
+6. If the run fails (the tag must equal `v<plugin version>`, and GitHub API outages happen — every release API call is retried 5×), re-run it or start it manually for the existing tag: `gh workflow run build-plugin.yml -f tag=v1.x.y`. Don't delete/re-push the tag. A manual run rebuilds the ZIP and replaces the asset; an already existing release keeps its title and notes. Don't build the ZIP by hand on Windows — the workflow's `rsync` excludes (`tests`, `.github`, `.gitignore`, …) apply at **every** folder level including `vendor/`, and a local `git archive` yields CRLF files
 
 ### Release History
 

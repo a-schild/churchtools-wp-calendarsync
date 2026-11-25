@@ -1,22 +1,31 @@
 name: Releases
 
-on: 
+on:
   push:
-    branches: [ main ]
     tags:
     - 'v*'
+  # Manual run for an existing tag: rebuilds the ZIP and (re-)attaches it to the
+  # release, e.g. after a failed run. An existing release keeps its title and notes.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and publish (e.g. v1.5.5)'
+        required: true
+        type: string
 
 jobs:
   build:
-    if: startsWith(github.ref, 'refs/tags/')
     name: Build and Release Asset
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
           # Full history and tags, so the previous tag can be resolved for the compare link
           fetch-depth: 0
 
@@ -26,6 +35,13 @@ jobs:
           VERSION=$(grep -oP "Version:\s+\K[0-9.]+" churchtools-wpcalendarsync.php)
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Extracted version: $VERSION"
+
+          # The ZIP name and the release notes are derived from the plugin version,
+          # so a tag that does not match it would publish a mislabelled release.
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "::error::Tag '$TAG' does not match the plugin version '$VERSION' (expected tag 'v$VERSION')."
+            exit 1
+          fi
 
       - name: Extract release notes from CHANGELOG.md
         id: get_notes
@@ -65,12 +81,6 @@ jobs:
           cat release-notes.md
           echo "-------------------------"
 
-          {
-            echo "notes<<RELEASE_NOTES_EOF"
-            cat release-notes.md
-            echo "RELEASE_NOTES_EOF"
-          } >> "$GITHUB_OUTPUT"
-
       - name: Build project
         run: |
           composer install --no-dev --optimize-autoloader
@@ -93,13 +103,39 @@ jobs:
           mv churchtools-wp-sync-${{ steps.get_version.outputs.version }}.zip ../
           cd ..
 
-      - name: Upload binaries to release
-        uses: svenstaro/upload-release-action@v2
-        with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: churchtools-wp-sync-${{ steps.get_version.outputs.version }}.zip
-          asset_name: churchtools-wp-sync-${{ steps.get_version.outputs.version }}.zip
-          tag: ${{ github.ref }}
-          overwrite: true
-          release_name: ${{ steps.get_version.outputs.version }}
-          body: ${{ steps.get_notes.outputs.notes }}
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.get_version.outputs.version }}
+        run: |
+          ZIP="churchtools-wp-sync-$VERSION.zip"
+
+          # The GitHub API occasionally answers 5xx / "Not Found" for a short while
+          # (this failed the v1.5.5 release), so every call is retried with a
+          # growing pause: 5 attempts, 15/30/45/60 s apart.
+          retry() {
+            attempt=1
+            until "$@"; do
+              if [ "$attempt" -ge 5 ]; then
+                echo "::error::'$*' still failing after $attempt attempts"
+                return 1
+              fi
+              echo "::warning::'$*' failed (attempt $attempt), retrying in $((attempt * 15)) s"
+              sleep $((attempt * 15))
+              attempt=$((attempt + 1))
+            done
+          }
+
+          # Create the release unless it already exists. The check is repeated on
+          # every attempt because a failed create call can still have created it.
+          # An existing release keeps its (possibly hand-edited) title and notes.
+          ensure_release() {
+            if gh release view "$TAG" > /dev/null 2>&1; then
+              echo "Release $TAG exists"
+              return 0
+            fi
+            gh release create "$TAG" --verify-tag --title "$VERSION" --notes-file release-notes.md
+          }
+
+          retry ensure_release
+          retry gh release upload "$TAG" "$ZIP" --clobber
