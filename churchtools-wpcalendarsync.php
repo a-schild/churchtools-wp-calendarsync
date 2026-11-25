@@ -10,7 +10,7 @@
  * Plugin Name:       Churchtools WP Calendarsync
  * Plugin URI:        https://github.com/a-schild/churchtools-wp-calendarsync
  * Description:       Churchtools wordpress calendar sync to events manager, requires "Events Manager" plugin. The sync is scheduled every hour to update WP events from churchtool.
- * Version:           1.5.4
+ * Version:           1.5.5
  * Author:            André Schild
  * Author URI:        https://github.com/a-schild/churchtools-wp-calendarsync/
  * License:           GPLv2 or later
@@ -268,7 +268,7 @@ function ctwpsync_add_settings_link(array $links): array {
  * Start at version 1.0.0 and use SemVer - https://semver.org
  * Rename this for your plugin and update it as you release new versions.
  */
-define( 'CTWPSYNC_VERSION', '1.5.4' );
+define( 'CTWPSYNC_VERSION', '1.5.5' );
 
 function ctwpsync_setup_menu(): void {
 	add_options_page('ChurchTools Calendar Importer', 'ChurchTools Calsync', 'manage_options', 'churchtools-wpcalendarsync', 'ctwpsync_dashboard');
@@ -1514,27 +1514,84 @@ function ctwpsync_migrate_logs(): void {
 	];
 
 	foreach ($moves as $old => $new) {
-		if (!@is_file($old)) {
-			continue;
-		}
-		if (@is_file($new)) {
-			// Destination exists: append old content, then drop the old file
-			$data = @file_get_contents($old);
-			if ($data !== false) {
-				@file_put_contents($new, $data, FILE_APPEND);
-			}
-			@unlink($old);
-		} elseif (!@rename($old, $new)) {
-			// rename can fail across filesystems; fall back to copy + delete
-			if (@copy($old, $new)) {
-				@unlink($old);
-			}
-		}
+		ctwpsync_move_log_file($old, $new);
 	}
 
 	update_option('ctwpsync_logs_migrated', true);
 }
 add_action('plugins_loaded', 'ctwpsync_migrate_logs', 4); // before settings/init migrations
+
+/**
+ * Move a log file to a new location. If the destination already exists, the
+ * old content is appended and the source removed. Missing sources are ignored.
+ */
+function ctwpsync_move_log_file(string $old, string $new): void {
+	if (!@is_file($old)) {
+		return;
+	}
+	if (@is_file($new)) {
+		// Destination exists: append old content, then drop the old file
+		$data = @file_get_contents($old);
+		if ($data !== false && @file_put_contents($new, $data, FILE_APPEND) !== false) {
+			@unlink($old);
+		}
+	} elseif (!@rename($old, $new)) {
+		// rename can fail across filesystems; fall back to copy + delete
+		if (@copy($old, $new)) {
+			@unlink($old);
+		}
+	}
+}
+
+/**
+ * Whether the churchtools-api library's own file log is wanted: only when the
+ * CTWPSYNC_DEBUG constant is set.
+ */
+function ctwpsync_library_file_log_enabled(): bool {
+	return defined('CTWPSYNC_DEBUG') && CTWPSYNC_DEBUG;
+}
+
+/**
+ * Configure the churchtools-api library's own logging. Call this before every
+ * use of the library (sync and admin AJAX helpers alike).
+ *
+ * The library enables both of its log handlers by default: a file log at fixed
+ * paths inside its (web-accessible) vendor directory, and a php://stdout
+ * handler. The file log is only wanted with CTWPSYNC_DEBUG; the stdout handler
+ * never is (it would end up in cron/WP-CLI output). The plugin has its own log.
+ */
+function ctwpsync_configure_library_logging(): void {
+	if (!class_exists('\CTApi\CTLog')) {
+		return;
+	}
+	\CTApi\CTLog::enableFileLog(ctwpsync_library_file_log_enabled());
+	\CTApi\CTLog::enableConsoleLog(false);
+}
+
+/**
+ * One-time clean-up of churchtools-api library logs left in the vendor
+ * directory.
+ *
+ * Up to 1.5.4 the library file log was in fact always on (the library enables
+ * it by default and the plugin never switched it off), so sites kept writing
+ * these files after ctwpsync_migrate_logs() had already run. Move them into
+ * the protected log directory once. Skipped while CTWPSYNC_DEBUG is set, as
+ * the library is then still writing to them.
+ */
+function ctwpsync_cleanup_vendor_logs(): void {
+	if (get_option('ctwpsync_vendor_logs_cleaned') || ctwpsync_library_file_log_enabled()) {
+		return;
+	}
+
+	$newDir = ctwpsync_log_dir(); // ensures dir + guard files exist
+	$vendorDir = __DIR__ . '/vendor/5pm-hdh/churchtools-api/';
+	foreach (['churchtools-api.log', 'churchtools-api-warning.log'] as $name) {
+		ctwpsync_move_log_file($vendorDir . $name, $newDir . DIRECTORY_SEPARATOR . $name);
+	}
+
+	update_option('ctwpsync_vendor_logs_cleaned', true);
+}
+add_action('plugins_loaded', 'ctwpsync_cleanup_vendor_logs', 4);
 
 /**
  * Schedule the event when the plugin is activated, if not already scheduled
@@ -1916,6 +1973,7 @@ function ctwpsync_validate_connection_callback(): void {
 
 	try {
 		// Configure ChurchTools API
+		ctwpsync_configure_library_logging();
 		\CTApi\CTConfig::setApiURL($url);
 		\CTApi\CTConfig::setApiKey($token);
 		\CTApi\CTConfig::validateConfig();
@@ -1996,6 +2054,7 @@ function ctwpsync_get_calendars_callback(): void {
 
 	try {
 		// Configure ChurchTools API
+		ctwpsync_configure_library_logging();
 		\CTApi\CTConfig::setApiURL($url);
 		\CTApi\CTConfig::setApiKey($token);
 
@@ -2076,6 +2135,7 @@ function ctwpsync_get_resource_types_callback(): void {
 
 	try {
 		// Configure ChurchTools API
+		ctwpsync_configure_library_logging();
 		\CTApi\CTConfig::setApiURL($url);
 		\CTApi\CTConfig::setApiKey($token);
 

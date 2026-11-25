@@ -1,5 +1,11 @@
 # churchtools-wp-calendarsync changelog
 
+## 2026-11-25
+- Release v1.5.5
+- **Bug fix (logging): the ChurchTools library log file is now really off unless `CTWPSYNC_DEBUG` is set** — since 1.3.4 the plugin was meant to write `churchtools-api.log` / `churchtools-api-warning.log` into its `vendor` directory only in debug mode, but the library enables that log by default and it was never switched off (PR #26, @JonFStr). It is now disabled for the sync and for the settings-page buttons ("Validate Connection", "Load Calendars", "Load Resource Types") alike
+- **Clean-up: library log files already written to the `vendor` directory are moved once into the protected log directory** (`uploads/ctwpsync-logs/`)
+- **Improvement: the library no longer writes its error messages to standard output**, which ended up in cron mail / WP-CLI output when the sync was started from the command line. Errors are still recorded in the plugin log
+
 ## 2026-09-19
 - Release v1.5.4
 - **Security: flyer import could write files outside its temp folder (path traversal)** — flyers were saved through the ChurchTools library's `downloadToPath()`, which writes the file under the name exactly as ChurchTools returns it; a flyer file name containing `../` could therefore place a file anywhere the web server may write. The flyer is now fetched directly and written under a sanitised name into a private, randomly named temp folder that is removed afterwards (temp files were previously never cleaned up). This also fixes flyers whose name contains spaces or umlauts, which never imported because the written and the read-back file names differed
