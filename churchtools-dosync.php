@@ -133,6 +133,9 @@ try {
 	set_time_limit(300); // 5min to process all events
 
     // Configure ChurchTools API using config object
+    if (function_exists('ctwpsync_configure_library_logging')) {
+        ctwpsync_configure_library_logging();
+    }
     CTConfig::setApiURL($config->url);
     CTConfig::setApiKey($config->apiToken);
     CTConfig::validateConfig();
