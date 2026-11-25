@@ -1,6 +1,7 @@
 # churchtools-wp-calendarsync changelog
 
-## Unreleased
+## 2026-11-25
+- Release v1.5.5
 - **Bug fix (logging): the ChurchTools library log file is now really off unless `CTWPSYNC_DEBUG` is set** — since 1.3.4 the plugin was meant to write `churchtools-api.log` / `churchtools-api-warning.log` into its `vendor` directory only in debug mode, but the library enables that log by default and it was never switched off (PR #26, @JonFStr). It is now disabled for the sync and for the settings-page buttons ("Validate Connection", "Load Calendars", "Load Resource Types") alike
 - **Clean-up: library log files already written to the `vendor` directory are moved once into the protected log directory** (`uploads/ctwpsync-logs/`)
 - **Improvement: the library no longer writes its error messages to standard output**, which ended up in cron mail / WP-CLI output when the sync was started from the command line. Errors are still recorded in the plugin log
