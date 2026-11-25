@@ -20,9 +20,7 @@ use Psr\Http\Message\ResponseInterface;
 // (web-accessible) vendor directory and offers no way to relocate them, so only
 // enable it via the CTWPSYNC_DEBUG constant. The plugin has its own logger below.
 $ctwpsync_debug_const = defined('CTWPSYNC_DEBUG') && CTWPSYNC_DEBUG;
-if ($ctwpsync_debug_const) {
-    CTLog::enableFileLog(); // enable library logfile (constant only)
-}
+CTLog::enableFileLog($ctwpsync_debug_const); // enable library logfile according to the value of the debug constant
 
 // Determine the plugin log level (ERROR / INFO / DEBUG, default INFO). Uses the
 // shared helper so the sync and the settings-page log panel always agree; the
